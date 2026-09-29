@@ -14,14 +14,15 @@ npm run build
 npx shadcn@latest add <component>
 ```
 
-## Environment (`.env.local`)
+## Environment (`.env.local`, optional locally)
 
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
+API_ORIGIN=http://localhost:8000     # server-side; where the /api/* rewrite proxies to
 ```
 
-- **Only `NEXT_PUBLIC_API_URL` belongs here.** No secrets, no Supabase keys, no DB URLs.
-- Anything prefixed `NEXT_PUBLIC_` is visible to every user.
+- The browser always calls **same-origin `/api/*`**. `next.config.ts` rewrites it to `API_ORIGIN`, so the refresh cookie is first-party (Vercel and Render are different sites).
+- `API_ORIGIN` defaults to `http://localhost:8000` and **must** be set on Vercel (the build fails otherwise).
+- No secrets, no Supabase keys, no DB URLs. Avoid `NEXT_PUBLIC_` variables; they're visible to every user.
 
 ## Structure
 
@@ -39,6 +40,7 @@ frontend/
 ├── components/
 │   ├── ui/                    # shadcn (generated, don't hand-edit)
 │   └── ...                    # feature components
+├── proxy.ts                   # Next 16 name for middleware.ts: coarse route guard
 ├── lib/
 │   ├── api.ts                 # single typed API client
 │   ├── auth.ts                # token handling, current user
@@ -57,9 +59,12 @@ frontend/
 
 ## Auth
 
-- Access token held in memory. Refresh token in an httpOnly cookie if the backend sets one, otherwise follow the backend's contract. **Never put tokens in URLs.**
-- On a 401, try one refresh, then redirect to `/login`.
-- Route protection by role in `middleware.ts` or a layout guard. `/verify/*` stays public.
+- Access token held in memory only (`lib/api.ts`). The backend keeps the refresh token in the httpOnly `lm_refresh` cookie. **Never put tokens in URLs.**
+- `/auth/refresh` goes through a **module-level single-flight** promise (`refreshSession()` in `lib/api.ts`). Never call it from a component ref: StrictMode and concurrent 401s would race.
+- On a 401, await the shared refresh and retry once; if that fails, redirect to `/login`. If `/auth/refresh` itself returns 401 (lost race), retry it once.
+- On page load, `AuthProvider` calls `refreshSession()` to restore the session.
+- **Next.js 16 renamed `middleware.ts` to `proxy.ts`.** `proxy.ts` redirects to `/login` when the `lm_session` flag cookie is missing. Role gating happens in layouts (UX only). `/`, `/login`, `/register` and `/verify/*` stay public.
+- Post-login redirects use `safeNextPath()` (relative paths only, no open redirects).
 
 ## Key screens
 
