@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,6 +59,18 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
 
+class ConfigError(RuntimeError):
+    """Invalid configuration. The message never contains setting values (they hold secrets)."""
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
+    try:
+        return Settings()  # type: ignore[call-arg]
+    except ValidationError as exc:
+        # Pydantic's own message embeds the input values; report field names and reasons only.
+        problems = "; ".join(
+            f"{'.'.join(str(p) for p in error['loc']) or 'settings'}: {error['msg']}"
+            for error in exc.errors(include_input=False, include_url=False)
+        )
+        raise ConfigError(f"Invalid configuration: {problems}") from None
