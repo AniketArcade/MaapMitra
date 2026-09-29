@@ -71,7 +71,7 @@ Load it through `pydantic-settings` in `core/config.py`. Never read `os.environ`
 
 Workflow for every schema change:
 1. `alembic revision --autogenerate -m "<name>" --rev-id <NNNN>` against local `lm_dev`.
-2. Hand-review it. Autogenerate misses enum drops in `downgrade` and data migrations.
+2. Hand-review it. Autogenerate misses enum drops in `downgrade`, sequences (create and drop) and data migrations.
 3. Round-trip locally: `upgrade head` → `downgrade -1` → `upgrade head`, then `alembic check` (no drift).
 4. `pytest` (migrates `lm_test` from scratch).
 5. **Claude applies it to Supabase** (`alembic upgrade head` with the default `.env`), verifies with `alembic current` and `alembic check`, then re-runs the seed if needed. The seed is idempotent.
@@ -80,6 +80,7 @@ Workflow for every schema change:
 | Revision | Name | Applied to Supabase |
 |---|---|---|
 | `0001` | auth (organizations, users, refresh_tokens, audit_logs) | 2026-09-30 (demo seed run the same day) |
+| `0002` | instruments (+ `instrument_uid_seq`, 3 enums, functional unique index) | 2026-09-30 (seed: `OTH-0001`) |
 
 ## Layering rules
 
@@ -89,6 +90,11 @@ Workflow for every schema change:
 - Every new endpoint needs a schema, an RBAC dependency, an audit log entry and at least one test.
 - Every schema change goes through Alembic. **Never edit tables in the Supabase dashboard.**
 - Type hints everywhere. Lint and format with `ruff`.
+- **Every request schema extends `StrictModel`** (`schemas/common.py`, `extra="forbid"`): unknown fields → 422.
+- **Every read of org-owned data goes through a `scope_*` helper** in `services/scoping.py` (`scope_instruments` today). Out of scope → 404 (`NotFound`), never 403. Scoping fails closed. Load the row with one scoped query; never load first and check ownership afterwards.
+- Lists return `Page[T]` (`{items, total, page, page_size}`) with `Annotated[PageParams, Depends()]` (page ≥1, page_size ≤100) and a stable order (`created_at desc, id`).
+- Rules that need the stored row (e.g. PATCH merged-state checks) raise `Unprocessable(msg, field=...)`, which returns FastAPI's 422 list shape.
+- Enums, units and regions live in `core/instrument_types.py` and `core/regions.py`. The frontend gets them from `GET /instruments/meta`.
 
 ## Data model
 
@@ -97,7 +103,11 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
 
 - `users`: DB check constraints tie `role` to `organization_id` (BUSINESS/GATC need one, officials must not) and require `state_code`/`district_code` for officials.
 - `refresh_tokens`: SHA-256 `token_hash` only, never the raw token.
-- `audit_logs`: append-only. Write rows through `services/audit.log()` in the caller's transaction.
+- `audit_logs`: append-only. Write rows through `services/audit.log(db, *, actor, action, entity_type, entity_id, organization_id, details, ip)` in the caller's transaction. Routers pass `ip=get_client_ip(request)`.
+- `instruments` (spec `docs/specs/02-instruments.md`):
+  - `instrument_uid` = `LM-{state}-{district}-{nextval('instrument_uid_seq'):06d}`. It's global, so there are gaps. It's permanent, even if the location changes, and never a credential.
+  - Global unique index `ix_instruments_mfr_serial` on `(lower(manufacturer), serial_number)`. The index is the duplicate check: catch the `IntegrityError` → 409. Serial numbers are stored uppercased.
+  - Hard delete until the first application exists (step 3 adds `ON DELETE RESTRICT` → 409). Identity fields and location lock while a non-terminal application exists (step 3).
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
   - instrument `instrument_uid`: `LM-JH-DHN-000123`
@@ -128,7 +138,8 @@ Base `/api`. REST + JSON.
 GET   /api/health                # liveness; ?db=true also pings DB (503 if down)
 POST  /api/auth/{login,register,refresh,logout}   GET /api/auth/me
 POST  /api/users                 # SUPER_ADMIN only; creates officials
-CRUD  /api/instruments
+GET   /api/instruments/meta      # types, units, accuracy classes, regions (any logged-in user)
+CRUD  /api/instruments           # write: BUSINESS (own org); read: + officials in jurisdiction; GATC 403
 CRUD  /api/applications          PATCH /api/applications/{id}/status
 POST  /api/documents             GET   /api/documents/{id}/url     # signed URL
 POST  /api/inspections           POST  /api/inspections/{id}/submit

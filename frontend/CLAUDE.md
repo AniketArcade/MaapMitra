@@ -51,6 +51,8 @@ frontend/
 ## Rules
 
 - **All data comes from the FastAPI backend through `lib/api.ts`.** No direct Supabase or DB calls, and no `fetch` scattered in components.
+- **Never hard-code instrument types, units, accuracy classes or regions.** Load them with `getInstrumentMeta()` (`lib/meta.ts`, cached `GET /instruments/meta`). Show names, send codes.
+- Pages behind login use `components/app-shell.tsx` in their `layout.tsx` (auth guard + header nav).
 - TypeScript strict. No `any` without a comment explaining why.
 - Server components by default. Use `"use client"` only for state, effects or event handlers.
 - Use shadcn/ui primitives first, and add custom components only when needed.
@@ -71,7 +73,10 @@ frontend/
 | Route | Who | Notes |
 |---|---|---|
 | `/dashboard` | all logged in | Role-aware cards and counts |
-| `/instruments/new` | Business | Form with serial, type, capacity, location |
+| `/instruments` | Business, officials | List + search + paging; officials read-only (jurisdiction) |
+| `/instruments/new` | Business | Form: type → unit dropdown filtered by type; state → district |
+| `/instruments/[id]` | Business, officials | Detail; business gets Edit + Delete (confirm dialog). 404 = "Instrument not found" |
+| `/instruments/[id]/edit` | Business | Same form; type is read-only; PATCH sends only changed fields |
 | `/applications/new` | Business | Pick instrument → type → upload docs → submit |
 | `/applications/[id]` | Business, Officer | Status timeline + documents |
 | `/inspections/[id]` | Officer | **Mobile-first** field flow (below) |
