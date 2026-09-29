@@ -7,7 +7,7 @@ Project-wide rules are in `../CLAUDE.md`. This file covers the backend only.
 > ⚠️ Assumed defaults. Update if the setup differs.
 
 ```bash
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python3.12 -m venv .venv && source .venv/bin/activate   # Python 3.12; Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload        # http://localhost:8000  (docs: /docs)
 pytest
@@ -58,6 +58,9 @@ CRON_SECRET=...
 
 Load it through `pydantic-settings` in `core/config.py`. Never read `os.environ` scattered around the code.
 
+- `DATABASE_URL`, `JWT_SECRET` (≥32 chars) and `CRON_SECRET` are required: the app refuses to start without them.
+- Use Supabase's **Session pooler** URL (port 5432, `*.pooler.supabase.com`). The direct host is IPv6-only (Render can't reach it); the transaction pooler (6543) breaks psycopg prepared statements.
+
 ## Layering rules
 
 - **Routers are thin.** They parse input, check auth, call a service and return a schema.
@@ -98,6 +101,7 @@ Certificate status: `VALID` · `EXPIRED` · `REVOKED`
 Base `/api`. REST + JSON.
 
 ```http
+GET   /api/health                # liveness; ?db=true also pings DB (503 if down)
 POST  /api/auth/{login,register,refresh,logout}
 CRUD  /api/instruments
 CRUD  /api/applications          PATCH /api/applications/{id}/status
