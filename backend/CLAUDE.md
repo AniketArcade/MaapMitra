@@ -16,6 +16,7 @@ alembic revision --autogenerate -m "msg"
 alembic upgrade head
 python -m app.seed --password '...'  # demo data (see database/seed/README.md)
 python -m app.cli create-superadmin --email you@example.com
+python -m app.cli create-bucket         # private documents bucket (once per environment)
 ```
 
 ## Structure
@@ -51,6 +52,7 @@ JWT_REFRESH_TTL_DAYS=7
 SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=...                # backend only, NEVER expose
 SUPABASE_BUCKET=documents
+STORAGE_BACKEND=supabase                     # supabase | memory (memory = tests only)
 PUBLIC_BASE_URL=https://<app>.vercel.app     # used in QR codes
 CORS_ORIGINS=http://localhost:3000,https://<app>.vercel.app
 RESEND_API_KEY=...
@@ -62,6 +64,8 @@ TRUSTED_PROXY_HOPS=0                         # proxies appending X-Forwarded-For
 Load it through `pydantic-settings` in `core/config.py`. Never read `os.environ` scattered around the code.
 
 - `DATABASE_URL`, `JWT_SECRET` (≥32 chars) and `CRON_SECRET` are required: the app refuses to start without them.
+- With `STORAGE_BACKEND=supabase` (the default), `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are required too; placeholders are rejected at startup. Local commands against `lm_dev`/`lm_test` can set `STORAGE_BACKEND=memory`.
+- In `.env`, never put a `# comment` on the same line as an empty value: python-dotenv reads the comment as the value.
 - `TRUSTED_PROXY_HOPS`: `get_client_ip` (in `core/deps.py`) takes the Nth `X-Forwarded-For` entry from the right. Never trust the leftmost entry. Measure the real hop count (Vercel rewrite → Render) on first deploy.
 - Use Supabase's **Session pooler** URL (port 5432, `*.pooler.supabase.com`). The direct host is IPv6-only (Render can't reach it); the transaction pooler (6543) breaks psycopg prepared statements.
 
@@ -81,6 +85,7 @@ Workflow for every schema change:
 |---|---|---|
 | `0001` | auth (organizations, users, refresh_tokens, audit_logs) | 2026-09-30 (demo seed run the same day) |
 | `0002` | instruments (+ `instrument_uid_seq`, 3 enums, functional unique index) | 2026-09-30 (seed: `OTH-0001`) |
+| `0003` | applications, application_status_history, documents (+ `application_number_seq`, 3 enums, partial unique index) | **pending** (needs Supabase Storage keys in `.env`) |
 
 ## Layering rules
 
@@ -94,7 +99,9 @@ Workflow for every schema change:
 - **Every read of org-owned data goes through a `scope_*` helper** in `services/scoping.py` (`scope_instruments` today). Out of scope → 404 (`NotFound`), never 403. Scoping fails closed. Load the row with one scoped query; never load first and check ownership afterwards.
 - Lists return `Page[T]` (`{items, total, page, page_size}`) with `Annotated[PageParams, Depends()]` (page ≥1, page_size ≤100) and a stable order (`created_at desc, id`).
 - Rules that need the stored row (e.g. PATCH merged-state checks) raise `Unprocessable(msg, field=...)`, which returns FastAPI's 422 list shape.
-- Enums, units and regions live in `core/instrument_types.py` and `core/regions.py`. The frontend gets them from `GET /instruments/meta`.
+- Enums, units and regions live in `core/instrument_types.py` and `core/regions.py`; application/document types in `core/application_types.py`. The frontend gets them from `GET /instruments/meta` and `GET /applications/meta`.
+- **Row locks re-read:** every `with_for_update()` re-check uses `.execution_options(populate_existing=True)`. Otherwise the identity map returns the stale pre-lock copy.
+- **Audit-writing GETs commit in the service** (e.g. `GET /documents/{id}/url` writes `DOCUMENT_URL_ISSUED`).
 
 ## Data model
 
@@ -107,7 +114,15 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
 - `instruments` (spec `docs/specs/02-instruments.md`):
   - `instrument_uid` = `LM-{state}-{district}-{nextval('instrument_uid_seq'):06d}`. It's global, so there are gaps. It's permanent, even if the location changes, and never a credential.
   - Global unique index `ix_instruments_mfr_serial` on `(lower(manufacturer), serial_number)`. The index is the duplicate check: catch the `IntegrityError` → 409. Serial numbers are stored uppercased.
-  - Hard delete until the first application exists (step 3 adds `ON DELETE RESTRICT` → 409). Identity fields and location lock while a non-terminal application exists (step 3).
+  - Delete is blocked by `ON DELETE RESTRICT` once **any** application exists (→ 409). While a non-terminal application exists (DRAFT included), `LOCKED_FIELDS` (identity + state/district) → 409; address/lat/lng stay editable until step 5.
+  - `InstrumentOut.active_application` (one LEFT JOIN); reported as `null` to officials while it's a DRAFT.
+- `applications` (spec `docs/specs/03-applications.md`):
+  - `application_number` = `APP-{UTC year}-{nextval('application_number_seq'):06d}`, display only.
+  - One active (non-terminal) application per instrument: partial unique index `ux_applications_active_instrument`.
+  - `state_code`/`district_code` are a snapshot of the instrument's location (locked while active).
+  - `application_status_history` is append-only and feeds the timeline (businesses can't read `audit_logs`).
+  - **Officials never see DRAFT applications or their documents** (`scope_applications`).
+- `documents`: `storage_path` = `applications/{application_id}/{document_id}.{pdf|jpg|png}` (never a URL, never the user's filename). `content_type` is the **sniffed** type. Max 10 per application.
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
   - instrument `instrument_uid`: `LM-JH-DHN-000123`
@@ -123,7 +138,10 @@ DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
       → APPROVED | REJECTED → CERTIFICATE_ISSUED
 ```
 
-- Enforce it through an `ALLOWED_TRANSITIONS` map in `services/applications.py`.
+- Enforce it through an `ALLOWED_TRANSITIONS` map in `services/applications.py`: `(from, to) → Edge(roles, enabled)`. Later steps flip `enabled`.
+- Enabled in step 3: DRAFT → SUBMITTED (BUSINESS, all required documents present), SUBMITTED → DOCUMENT_REVIEW (LM_OFFICER), DOCUMENT_REVIEW → REJECTED (LM_OFFICER, `note` 10–1000 chars).
+- `PATCH /applications/{id}/status` evaluation order: out of scope → 404; not an edge → 409 `Invalid status change`; wrong role → 403; not enabled → 409 `This action is not available yet`; edge rules → 409/422; apply (row lock, history row, audit row, one transaction).
+- `ApplicationDetail.allowed_actions` lists the enabled edges the caller's role may take (requirements not considered).
 - The status PATCH endpoint validates against that map and the caller's role. It never sets an arbitrary status.
 - **APPROVED → CERTIFICATE_ISSUED happens in the same DB transaction** as certificate creation.
 - REJECTED is terminal. Re-verification means a new application.
@@ -146,6 +164,9 @@ POST  /api/inspections           POST  /api/inspections/{id}/submit
 GET   /api/certificates/{id}     GET   /api/certificates/{id}/pdf
 POST  /api/jobs/expiry-check     # requires X-Cron-Secret header
 GET   /api/public/verify/{certificate_number}                     # no auth
+GET   /api/applications/meta       # types, statuses, document types + requirements, upload limits
+CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
+DELETE /api/documents/{id}         # BUSINESS, DRAFT only
 ```
 
 ### Public verify
@@ -172,6 +193,14 @@ GET   /api/public/verify/{certificate_number}                     # no auth
 - Refresh rotates on every call. A revoked token seen again within 10 s is a lost race (401, cookies kept); after that it revokes the user's whole token family.
 - Rate limits are in-memory (`core/rate_limit.py`): login 5/min per email + 20/min per IP, register 10/hour per IP. **Production shortcut:** resets on restart, not shared across instances.
 - CORS: browser traffic normally arrives same-origin through the Next.js `/api/*` rewrite. CORS only matters for direct calls.
+
+## Documents and storage
+
+- `app/storage/`: `Storage` protocol; `SupabaseStorage` (REST via `httpx2`, service role key, no SDK) and `MemoryStorage` (tests). `get_storage()` picks one by `STORAGE_BACKEND`. The key is never logged (errors log the operation and status only).
+- `BodySizeLimitMiddleware` (`app/middleware/body_limit.py`) runs before multipart parsing on `POST /api/documents`: no `Content-Length` → 411; over 10 MiB + 64 KiB → 413 without reading; streamed overflow → 413.
+- Upload order: rate limit (60/hour/user) → scope + DRAFT + count pre-checks → read ≤10 MiB + 1 → sniff magic bytes (PDF/PNG/JPEG only) → `storage.put` **outside** any lock (failure → 502) → lock the application row, re-check DRAFT and count, insert, audit, commit → on any failure after `put`, best-effort delete of the object. Rare orphans are an accepted MVP risk.
+- Signed URLs: 300 s, `download=<sanitized filename>`, audited as `DOCUMENT_URL_ISSUED`.
+- The bucket is private, with bucket-level size and MIME limits (`python -m app.cli create-bucket`).
 
 ## Security (non-negotiable)
 

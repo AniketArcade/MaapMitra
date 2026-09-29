@@ -20,6 +20,7 @@ npx shadcn@latest add <component>
 API_ORIGIN=http://localhost:8000     # server-side; where the /api/* rewrite proxies to
 ```
 
+- Optional `NEXT_PUBLIC_UPLOAD_ORIGIN` (public, non-secret, e.g. the Render URL): if set, `uploadDocument()` posts uploads there directly instead of through the rewrite. It's the fallback if Vercel caps proxied request bodies.
 - The browser always calls **same-origin `/api/*`**. `next.config.ts` rewrites it to `API_ORIGIN`, so the refresh cookie is first-party (Vercel and Render are different sites).
 - `API_ORIGIN` defaults to `http://localhost:8000` and **must** be set on Vercel (the build fails otherwise).
 - No secrets, no Supabase keys, no DB URLs. Avoid `NEXT_PUBLIC_` variables; they're visible to every user.
@@ -51,6 +52,10 @@ frontend/
 ## Rules
 
 - **All data comes from the FastAPI backend through `lib/api.ts`.** No direct Supabase or DB calls, and no `fetch` scattered in components.
+- **Never hard-code application statuses, application types or document types either:** use `getApplicationMeta()` (`GET /applications/meta`) and `labelFor()`.
+- Status-change buttons come only from `ApplicationDetail.allowed_actions`. Submit is also disabled until every required document is satisfied.
+- **Opening a document:** call `window.open("", "_blank")` synchronously in the click handler, then set its location once `GET /documents/{id}/url` returns; close it on failure (popup blockers).
+- `lib/api.ts` never sets `Content-Type` for `FormData` bodies.
 - **Never hard-code instrument types, units, accuracy classes or regions.** Load them with `getInstrumentMeta()` (`lib/meta.ts`, cached `GET /instruments/meta`). Show names, send codes.
 - Pages behind login use `components/app-shell.tsx` in their `layout.tsx` (auth guard + header nav).
 - TypeScript strict. No `any` without a comment explaining why.
@@ -77,8 +82,10 @@ frontend/
 | `/instruments/new` | Business | Form: type → unit dropdown filtered by type; state → district |
 | `/instruments/[id]` | Business, officials | Detail; business gets Edit + Delete (confirm dialog). 404 = "Instrument not found" |
 | `/instruments/[id]/edit` | Business | Same form; type is read-only; PATCH sends only changed fields |
+| `/applications` | Business, officials | List + status filter (`?status=`) + search; officials never see drafts |
+| `/applications/new?instrument_id=` | Business | Instrument without an active application → type → notes → Create draft |
 | `/applications/new` | Business | Pick instrument → type → upload docs → submit |
-| `/applications/[id]` | Business, Officer | Status timeline + documents |
+| `/applications/[id]` | Business, officials | Requirements checklist, per-type upload (draft), View/Remove, Submit / Start review / Reject, timeline |
 | `/inspections/[id]` | Officer | **Mobile-first** field flow (below) |
 | `/certificates/[id]` | Business | Download PDF, show QR |
 | `/admin` | Admin | Counts, expiring soon, audit log |

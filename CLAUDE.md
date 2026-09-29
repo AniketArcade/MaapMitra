@@ -61,7 +61,7 @@ PostGIS · Leaflet maps · pgvector/RAG · OCR · Celery/Redis · native mobile 
 
 1. Login + RBAC ✅ (`feat/auth-rbac`, spec `docs/specs/01-login-rbac.md`)
 2. Instrument registration ✅ (spec `docs/specs/02-instruments.md`)
-3. Application + document upload
+3. Application + document upload ✅ built; Supabase Storage apply pending (spec `docs/specs/03-applications.md`)
 4. Business dashboard
 5. Officer dashboard
 6. Inspection checklist + measurements

@@ -29,5 +29,10 @@ Optional, before a demo: make the next UID a nice number (UIDs are never credent
 ALTER SEQUENCE instrument_uid_seq RESTART WITH 123;  -- next UID: LM-JH-DHN-000123
 ```
 
+Demo application: a **SUBMITTED** verification application for `OTH-0001` with two generated
+documents (a one-page PDF invoice and a small PNG), so the officer has a queue item on first login.
+It needs Supabase Storage configured (`STORAGE_BACKEND=supabase` with a real key) and the
+bucket created (`python -m app.cli create-bucket`). ABC Traders' application is **not** seeded.
+
 - The seed refuses to run when `ENV=production` unless `--force-demo` is passed.
 - **Production shortcut:** delete these accounts after the hackathon.
