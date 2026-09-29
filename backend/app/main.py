@@ -7,7 +7,7 @@ from app.core.config import get_settings
 from app.core.cookies import clear_auth_cookies
 from app.core.errors import DomainError, Unprocessable
 from app.core.rate_limit import limiter
-from app.routers import auth, health, users
+from app.routers import auth, health, instruments, users
 
 
 async def domain_error_handler(_: Request, exc: Exception) -> JSONResponse:
@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    for router in (health.router, auth.router, users.router):
+    for router in (health.router, auth.router, users.router, instruments.router):
         app.include_router(router, prefix="/api")
     return app
 
