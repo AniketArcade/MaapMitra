@@ -37,6 +37,7 @@ def create_superadmin(email: str, full_name: str) -> int:
         db.flush()
         audit.log(
             db,
+            actor=None,
             action="USER_CREATED",
             entity_type="user",
             entity_id=user.id,

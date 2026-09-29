@@ -3,9 +3,17 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.regions import is_valid_region, is_valid_state
 from app.core.roles import Role
 from app.models.user import User
-from app.schemas.common import DistrictCode, LowerEmail, Name, NewPassword, StateCode
+from app.schemas.common import (
+    DistrictCode,
+    LowerEmail,
+    Name,
+    NewPassword,
+    StateCode,
+    StrictModel,
+)
 
 
 class UserOut(BaseModel):
@@ -36,7 +44,7 @@ class UserOut(BaseModel):
         )
 
 
-class UserCreate(BaseModel):
+class UserCreate(StrictModel):
     """Official accounts only. BUSINESS uses /auth/register; GATC is deferred."""
 
     email: LowerEmail
@@ -55,4 +63,10 @@ class UserCreate(BaseModel):
             raise ValueError("STATE_ADMIN must not have a district_code")
         if self.role != "STATE_ADMIN" and self.district_code is None:
             raise ValueError(f"district_code is required for {self.role}")
+        if not is_valid_state(self.state_code):
+            raise ValueError("Unknown state")
+        if self.district_code is not None and not is_valid_region(
+            self.state_code, self.district_code
+        ):
+            raise ValueError("Unknown district for this state")
         return self

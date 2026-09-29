@@ -37,10 +37,30 @@ def test_register_creates_org_and_user(client: TestClient) -> None:
         assert s.scalar(select(User)).organization_id == org.id
 
 
-def test_register_ignores_client_role(client: TestClient) -> None:
+def test_register_rejects_client_role(client: TestClient) -> None:
     res = client.post("/api/auth/register", json=register_body(role="SUPER_ADMIN"))
-    assert res.status_code == 201
-    assert res.json()["user"]["role"] == "BUSINESS"
+    assert res.status_code == 422  # unknown fields are forbidden project-wide
+    with SessionLocal() as s:
+        assert s.scalar(select(User)) is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"state_code": "XX"}, {"state_code": "BR", "district_code": "RNC"}, {"district_code": "ZZZ"}],
+)
+def test_register_rejects_unknown_region(client: TestClient, overrides: dict) -> None:
+    assert client.post("/api/auth/register", json=register_body(**overrides)).status_code == 422
+
+
+def test_login_rejects_unknown_field(client: TestClient) -> None:
+    body = {"email": "a@test.demo", "password": PASSWORD, "remember": True}
+    assert client.post("/api/auth/login", json=body).status_code == 422
+
+
+def test_me_returns_org_scope_for_business(client: TestClient, make_user) -> None:  # noqa: ANN001
+    user = make_user(Role.BUSINESS, org_state="JH", org_district="RNC")
+    body = client.get("/api/auth/me", headers=auth_header(user)).json()
+    assert (body["state_code"], body["district_code"]) == ("JH", "RNC")
 
 
 def test_register_lowercases_email_and_uppercases_codes(client: TestClient) -> None:

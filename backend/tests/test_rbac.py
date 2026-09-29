@@ -83,6 +83,9 @@ def test_created_official_can_log_in(client: TestClient, make_user) -> None:  # 
         {"role": "STATE_ADMIN", "state_code": None, "district_code": None},
         {"role": "STATE_ADMIN", "district_code": "DHN"},
         {"password": "short"},
+        {"state_code": "XX"},
+        {"state_code": "BR", "district_code": "DHN"},
+        {"clearance": "top"},
     ],
 )
 def test_create_user_validation(client: TestClient, make_user, overrides: dict) -> None:  # noqa: ANN001

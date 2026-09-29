@@ -73,14 +73,21 @@ def db() -> Iterator[Session]:
 
 @pytest.fixture
 def make_user(db: Session) -> Callable[..., User]:
-    def _make(role: Role = Role.BUSINESS, email: str | None = None, **kw: object) -> User:
+    def _make(
+        role: Role = Role.BUSINESS,
+        email: str | None = None,
+        *,
+        org_state: str = "JH",
+        org_district: str = "DHN",
+        **kw: object,
+    ) -> User:
         org = None
         if role in (Role.BUSINESS, Role.GATC):
             org = Organization(
                 type=OrgType.GATC if role == Role.GATC else OrgType.BUSINESS,
                 name=f"Org {uuid.uuid4().hex[:6]}",
-                state_code="JH",
-                district_code="DHN",
+                state_code=org_state,
+                district_code=org_district,
             )
         scope: dict[str, object] = {}
         if role == Role.STATE_ADMIN:

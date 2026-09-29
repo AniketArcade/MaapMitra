@@ -32,7 +32,7 @@ def create_user(db: Session, actor: User, body: UserCreate, *, ip: str) -> User:
     audit.log(
         db,
         action="USER_CREATED",
-        actor_id=actor.id,
+        actor=actor.id,
         entity_type="user",
         entity_id=user.id,
         details={

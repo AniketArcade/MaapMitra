@@ -1,14 +1,20 @@
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
-from app.schemas.common import DistrictCode, LowerEmail, Name, NewPassword, StateCode
+from app.core.regions import is_valid_region
+from app.schemas.common import (
+    DistrictCode,
+    LowerEmail,
+    Name,
+    NewPassword,
+    StateCode,
+    StrictModel,
+)
 from app.schemas.user import UserOut
 
 
-class RegisterRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # a client-sent "role" is silently dropped
-
+class RegisterRequest(StrictModel):  # a client-sent "role" -> 422
     organization_name: Name = Field(min_length=2)
     registration_number: str | None = Field(default=None, max_length=50)
     address: str | None = Field(default=None, max_length=500)
@@ -19,8 +25,14 @@ class RegisterRequest(BaseModel):
     phone: str | None = Field(default=None, max_length=20)
     password: NewPassword
 
+    @model_validator(mode="after")
+    def check_region(self) -> Self:
+        if not is_valid_region(self.state_code, self.district_code):
+            raise ValueError("Unknown state or district")
+        return self
 
-class LoginRequest(BaseModel):
+
+class LoginRequest(StrictModel):
     email: LowerEmail
     password: SecretStr = Field(min_length=1, max_length=128)
 

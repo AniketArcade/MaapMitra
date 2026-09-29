@@ -5,7 +5,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.core.config import get_settings
 from app.core.cookies import clear_auth_cookies
-from app.core.errors import DomainError
+from app.core.errors import DomainError, Unprocessable
 from app.core.rate_limit import limiter
 from app.routers import auth, health, users
 
@@ -13,7 +13,11 @@ from app.routers import auth, health, users
 async def domain_error_handler(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, DomainError)
     headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
-    response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=headers)
+    detail: object = exc.detail
+    if isinstance(exc, Unprocessable) and exc.field:
+        # Same shape as FastAPI's request validation errors, so clients map it to the field.
+        detail = [{"loc": ["body", exc.field], "msg": exc.detail, "type": "value_error"}]
+    response = JSONResponse({"detail": detail}, status_code=exc.status_code, headers=headers)
     if exc.clear_cookies:
         clear_auth_cookies(response)
     return response

@@ -77,10 +77,10 @@ def register(db: Session, body: RegisterRequest, *, ip: str) -> AuthResult:
     audit.log(
         db,
         action="USER_REGISTERED",
-        actor_id=user.id,
+        actor=user.id,
         entity_type="user",
         entity_id=user.id,
-        org_id=org.id,
+        organization_id=org.id,
         details={"organization_name": org.name},
         ip=ip,
     )
@@ -106,7 +106,13 @@ def login(db: Session, body: LoginRequest, *, ip: str) -> AuthResult:
             if not user.is_active
             else "bad_password"
         )
-        audit.log(db, action="LOGIN_FAILED", details={"email": body.email, "reason": reason}, ip=ip)
+        audit.log(
+            db,
+            actor=None,
+            action="LOGIN_FAILED",
+            details={"email": body.email, "reason": reason},
+            ip=ip,
+        )
         db.commit()  # commit-then-raise: the evidence must survive the error
         raise AuthError(INVALID_CREDENTIALS)
 
@@ -116,10 +122,10 @@ def login(db: Session, body: LoginRequest, *, ip: str) -> AuthResult:
     audit.log(
         db,
         action="LOGIN_SUCCEEDED",
-        actor_id=user.id,
+        actor=user.id,
         entity_type="user",
         entity_id=user.id,
-        org_id=user.organization_id,
+        organization_id=user.organization_id,
         ip=ip,
     )
     result = issue_tokens(db, user)
@@ -155,7 +161,7 @@ def refresh(db: Session, raw_token: str | None, *, ip: str) -> AuthResult:
         audit.log(
             db,
             action="REFRESH_REUSE_DETECTED",
-            actor_id=row.user_id,
+            actor=row.user_id,
             entity_type="user",
             entity_id=row.user_id,
             details={"token_id": str(row.id)},
@@ -184,6 +190,6 @@ def logout(db: Session, raw_token: str | None, *, ip: str) -> None:
         return
     row.revoked_at = _now()
     audit.log(
-        db, action="LOGOUT", actor_id=row.user_id, entity_type="user", entity_id=row.user_id, ip=ip
+        db, action="LOGOUT", actor=row.user_id, entity_type="user", entity_id=row.user_id, ip=ip
     )
     db.commit()
