@@ -27,7 +27,9 @@ from app.core.roles import OrgType, Role  # noqa: E402
 from app.core.security import create_access_token, hash_password  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import create_app  # noqa: E402
-from app.models import Organization, User  # noqa: E402
+from app.models import Instrument, Organization, User  # noqa: E402
+from app.schemas.instrument import InstrumentCreate  # noqa: E402
+from app.services import instruments as instruments_service  # noqa: E402
 
 PASSWORD = "Password123!"
 BASE_URL = "https://testserver"  # cookies are Secure outside ENV=development
@@ -49,9 +51,7 @@ def _clean() -> Iterator[None]:
     yield
     with engine.begin() as conn:
         conn.execute(
-            text(
-                "TRUNCATE audit_logs, refresh_tokens, users, organizations RESTART IDENTITY CASCADE"
-            )
+            text("TRUNCATE audit_logs, instruments, refresh_tokens, users, organizations CASCADE")
         )
 
 
@@ -125,3 +125,32 @@ def register_body(**overrides: object) -> dict[str, object]:
     }
     body.update(overrides)
     return body
+
+
+def instrument_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "instrument_type": "WEIGHING_SCALE",
+        "manufacturer": "Essae Teraoka",
+        "model": "DS-252",
+        "serial_number": f"SN-{uuid.uuid4().hex[:8].upper()}",
+        "capacity": 500,
+        "capacity_unit": "kg",
+        "address": "Bank More, Dhanbad",
+    }
+    body.update(overrides)
+    return body
+
+
+@pytest.fixture
+def make_instrument(db: Session) -> Callable[..., Instrument]:
+    """Creates through the service, so UIDs and defaults are real."""
+
+    def _make(owner: User, **overrides: object) -> Instrument:
+        with SessionLocal() as s:
+            user = s.get(User, owner.id)
+            assert user is not None
+            body = InstrumentCreate.model_validate(instrument_body(**overrides))
+            instrument = instruments_service.create(s, user, body, ip="test")
+            return instrument
+
+    return _make
