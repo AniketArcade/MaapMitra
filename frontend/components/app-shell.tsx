@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/auth";
 const NAV = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/instruments", label: "Instruments" },
+  { href: "/applications", label: "Applications" },
 ];
 
 // UX guard only. The backend enforces every permission.

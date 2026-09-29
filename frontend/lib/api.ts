@@ -80,18 +80,39 @@ export function refreshSession(): Promise<AuthResponse | null> {
   return refreshInFlight;
 }
 
-export async function api<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+type ApiOptions = {
+  /** Absolute origin for this call (upload fallback); default is the same-origin /api rewrite. */
+  origin?: string;
+  retried?: boolean;
+};
+
+export async function api<T>(path: string, init: RequestInit = {}, options: ApiOptions = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const isForm = typeof FormData !== "undefined" && init.body instanceof FormData;
+  // FormData sets its own multipart boundary; never override it.
+  if (init.body && !isForm && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
-  const res = await fetch(`/api${path}`, { ...init, headers, credentials: "same-origin" });
+  const origin = options.origin ?? "";
+  const res = await fetch(`${origin}/api${path}`, {
+    ...init,
+    headers,
+    // Cross-origin calls authenticate with the bearer header only; cookies stay first-party.
+    credentials: origin ? "omit" : "same-origin",
+  });
 
-  if (res.status === 401 && !retried && !path.startsWith("/auth/")) {
-    if (await refreshSession()) return api<T>(path, init, true);
+  if (res.status === 401 && !options.retried && !path.startsWith("/auth/")) {
+    if (await refreshSession()) return api<T>(path, init, { ...options, retried: true });
     onSessionExpired?.();
   }
   if (!res.ok) throw await toApiError(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Uploads go straight to Render when NEXT_PUBLIC_UPLOAD_ORIGIN is set (fallback if the
+ *  Vercel rewrite caps request bodies); otherwise through the /api rewrite like everything else. */
+export function uploadDocument<T>(form: FormData): Promise<T> {
+  const origin = process.env.NEXT_PUBLIC_UPLOAD_ORIGIN || undefined;
+  return api<T>("/documents", { method: "POST", body: form }, { origin });
 }

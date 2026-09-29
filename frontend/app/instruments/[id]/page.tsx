@@ -74,7 +74,16 @@ export default function InstrumentDetailPage() {
           </h1>
         </div>
         {canEdit ? (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            {i.active_application ? (
+              <Link href={`/applications/${i.active_application.id}`} className={buttonVariants()}>
+                View application {i.active_application.application_number}
+              </Link>
+            ) : (
+              <Link href={`/applications/new?instrument_id=${i.id}`} className={buttonVariants()}>
+                Apply for verification
+              </Link>
+            )}
             <Link href={`/instruments/${i.id}/edit`} className={buttonVariants({ variant: "outline" })}>
               Edit
             </Link>
@@ -100,6 +109,21 @@ export default function InstrumentDetailPage() {
         />
         <Row label="Registered" value={new Date(i.created_at).toLocaleString()} />
       </dl>
+
+      {!canEdit && i.active_application ? (
+        <p className="text-sm">
+          Application in progress:{" "}
+          <Link href={`/applications/${i.active_application.id}`} className="underline">
+            {i.active_application.application_number}
+          </Link>
+        </p>
+      ) : null}
+      {canEdit && i.active_application ? (
+        <p className="text-sm text-muted-foreground">
+          While an application is in progress, the serial number, capacity and location can&apos;t be
+          changed.
+        </p>
+      ) : null}
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>

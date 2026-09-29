@@ -1,5 +1,5 @@
 import { api } from "@/lib/api";
-import type { InstrumentMeta } from "@/lib/types";
+import type { ApplicationMeta, InstrumentMeta } from "@/lib/types";
 
 // Loaded once per page session; the backend is the single source of truth.
 let metaPromise: Promise<InstrumentMeta> | null = null;
@@ -20,4 +20,18 @@ export function regionLabel(meta: InstrumentMeta | null, state: string, district
   const region = meta?.regions.find((r) => r.state_code === state);
   const districtName = region?.districts.find((d) => d.code === district)?.name;
   return region && districtName ? `${districtName}, ${region.state_name}` : `${state} / ${district}`;
+}
+
+let applicationMetaPromise: Promise<ApplicationMeta> | null = null;
+
+export function getApplicationMeta(): Promise<ApplicationMeta> {
+  applicationMetaPromise ??= api<ApplicationMeta>("/applications/meta").catch((err: unknown) => {
+    applicationMetaPromise = null;
+    throw err;
+  });
+  return applicationMetaPromise;
+}
+
+export function labelFor(list: { value: string; label: string }[] | undefined, value: string): string {
+  return list?.find((item) => item.value === value)?.label ?? value;
 }

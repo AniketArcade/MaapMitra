@@ -34,11 +34,55 @@ function InstrumentCount() {
   );
 }
 
+function useTotal(path: string): number | null {
+  const [total, setTotal] = useState<number | null>(null);
+  useEffect(() => {
+    api<Page<unknown>>(path).then(
+      (page) => setTotal(page.total),
+      () => setTotal(null),
+    );
+  }, [path]);
+  return total;
+}
+
+function ApplicationCount() {
+  const total = useTotal("/applications?page_size=1");
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <span className="text-sm">
+        {total === null ? "Applications" : `${total} application${total === 1 ? "" : "s"}`}
+      </span>
+      <Link href="/applications" className={buttonVariants({ variant: "outline", size: "sm" })}>
+        View applications
+      </Link>
+    </div>
+  );
+}
+
+function ReviewQueue() {
+  const total = useTotal("/applications?status=SUBMITTED&page_size=1");
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <span className="text-sm">
+        {total === null ? "Submitted, awaiting review" : `${total} submitted, awaiting review`}
+      </span>
+      <Link href="/applications?status=SUBMITTED" className={buttonVariants({ size: "sm" })}>
+        Review queue
+      </Link>
+    </div>
+  );
+}
+
 function JurisdictionLink() {
   return (
-    <Link href="/instruments" className={buttonVariants({ variant: "outline", size: "sm" })}>
-      View instruments
-    </Link>
+    <div className="flex flex-wrap gap-2">
+      <Link href="/instruments" className={buttonVariants({ variant: "outline", size: "sm" })}>
+        View instruments
+      </Link>
+      <Link href="/applications" className={buttonVariants({ variant: "outline", size: "sm" })}>
+        View applications
+      </Link>
+    </div>
   );
 }
 
@@ -52,7 +96,8 @@ function RoleCard({ user }: { user: User }) {
         </CardHeader>
         <CardContent className="grid gap-3">
           <InstrumentCount />
-          <p className="text-sm text-muted-foreground">Applications and certificates will appear here.</p>
+          <ApplicationCount />
+          <p className="text-sm text-muted-foreground">Certificates will appear here.</p>
         </CardContent>
       </Card>
     );
@@ -67,9 +112,8 @@ function RoleCard({ user }: { user: User }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
-          <p className="text-sm text-muted-foreground">
-            Your document reviews and inspections will appear here.
-          </p>
+          <ReviewQueue />
+          <p className="text-sm text-muted-foreground">Scheduled inspections will appear here.</p>
           <div>
             <JurisdictionLink />
           </div>

@@ -69,6 +69,7 @@ export type Instrument = {
   longitude: number | null;
   created_at: string;
   updated_at: string;
+  active_application: ActiveApplicationRef | null;
 };
 
 export type InstrumentMeta = {
@@ -79,4 +80,66 @@ export type InstrumentMeta = {
     state_name: string;
     districts: { code: string; name: string }[];
   }[];
+};
+
+export type ActiveApplicationRef = { id: string; application_number: string; status: string };
+
+export type InstrumentSummary = {
+  id: string;
+  instrument_uid: string;
+  instrument_type: string;
+  manufacturer: string;
+  model: string;
+  serial_number: string;
+  capacity: number;
+  capacity_unit: string;
+};
+
+// Statuses, application types and document types are strings owned by the backend
+// (GET /applications/meta). Never hard-code their lists here.
+export type Application = {
+  id: string;
+  application_number: string;
+  status: string;
+  application_type: string;
+  instrument: InstrumentSummary;
+  organization_id: string;
+  organization_name: string;
+  state_code: string;
+  district_code: string;
+  business_notes: string | null;
+  submitted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DocumentOut = {
+  id: string;
+  document_type: string;
+  original_filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+};
+
+export type ApplicationDetail = Application & {
+  documents: DocumentOut[];
+  history: {
+    from_status: string | null;
+    to_status: string;
+    actor_name: string;
+    note: string | null;
+    created_at: string;
+  }[];
+  requirements: { document_type: string; label: string; required: boolean; satisfied: boolean }[];
+  allowed_actions: string[];
+};
+
+export type LabelledValue = { value: string; label: string };
+
+export type ApplicationMeta = {
+  application_types: (LabelledValue & { required_documents: string[] })[];
+  statuses: LabelledValue[];
+  document_types: LabelledValue[];
+  limits: { max_file_bytes: number; max_documents: number; allowed_content_types: string[] };
 };
