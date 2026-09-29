@@ -65,6 +65,22 @@ Load it through `pydantic-settings` in `core/config.py`. Never read `os.environ`
 - `TRUSTED_PROXY_HOPS`: `get_client_ip` (in `core/deps.py`) takes the Nth `X-Forwarded-For` entry from the right. Never trust the leftmost entry. Measure the real hop count (Vercel rewrite → Render) on first deploy.
 - Use Supabase's **Session pooler** URL (port 5432, `*.pooler.supabase.com`). The direct host is IPv6-only (Render can't reach it); the transaction pooler (6543) breaks psycopg prepared statements.
 
+## Migrations
+
+`backend/.env` points at **Supabase**. For local work, override it: `DATABASE_URL=postgresql+psycopg://localhost/lm_dev` (env vars beat `.env`).
+
+Workflow for every schema change:
+1. `alembic revision --autogenerate -m "<name>" --rev-id <NNNN>` against local `lm_dev`.
+2. Hand-review it. Autogenerate misses enum drops in `downgrade` and data migrations.
+3. Round-trip locally: `upgrade head` → `downgrade -1` → `upgrade head`, then `alembic check` (no drift).
+4. `pytest` (migrates `lm_test` from scratch).
+5. **Claude applies it to Supabase** (`alembic upgrade head` with the default `.env`), verifies with `alembic current` and `alembic check`, then re-runs the seed if needed. The seed is idempotent.
+6. Record it in the table below. From then on the migration is **frozen**: never edit it, write a new one.
+
+| Revision | Name | Applied to Supabase |
+|---|---|---|
+| `0001` | auth (organizations, users, refresh_tokens, audit_logs) | 2026-09-30 (demo seed run the same day) |
+
 ## Layering rules
 
 - **Routers are thin.** They parse input, check auth, call a service and return a schema.

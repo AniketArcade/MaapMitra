@@ -59,7 +59,7 @@ PostGIS · Leaflet maps · pgvector/RAG · OCR · Celery/Redis · native mobile 
 
 ## MVP build order
 
-1. Login + RBAC
+1. Login + RBAC ✅ (`feat/auth-rbac`, spec `docs/specs/01-login-rbac.md`)
 2. Instrument registration
 3. Application + document upload
 4. Business dashboard
@@ -83,7 +83,8 @@ the officer inspects and approves → `CERT-2026-000123` with QR is issued → a
 - Pick the simplest thing that works for the MVP. Flag production shortcuts.
 - Never add a deferred technology or a new service without asking.
 - Never invent legal or regulatory facts. Mark unknowns as `ASSUMPTION`.
-- Never commit or edit `.env*` files, applied migrations, or demo seed data without asking.
+- Never commit or edit `.env*` files without asking.
+- **Claude applies migrations and runs the demo seed on Supabase itself**, once local tests pass (workflow in `backend/CLAUDE.md` → Migrations). Never edit an already-applied migration (write a new one), and ask before changing *what* the seed data contains.
 - When the schema, API or status flow changes, update the relevant CLAUDE.md.
 - Style: terse, decision-flagging, copy-pasteable code.
 
