@@ -10,11 +10,12 @@ Project-wide rules are in `../CLAUDE.md`. This file covers the backend only.
 python3.12 -m venv .venv && source .venv/bin/activate   # Python 3.12; Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload        # http://localhost:8000  (docs: /docs)
-pytest
+pytest                               # needs local Postgres DB lm_test (see Testing)
 ruff check . && ruff format .
 alembic revision --autogenerate -m "msg"
 alembic upgrade head
-python -m app.seed                   # demo data
+python -m app.seed --password '...'  # demo data (see database/seed/README.md)
+python -m app.cli create-superadmin --email you@example.com
 ```
 
 ## Structure
@@ -54,11 +55,14 @@ PUBLIC_BASE_URL=https://<app>.vercel.app     # used in QR codes
 CORS_ORIGINS=http://localhost:3000,https://<app>.vercel.app
 RESEND_API_KEY=...
 CRON_SECRET=...
+ENV=development                              # development | test | production (cookie Secure flag, seed guard)
+TRUSTED_PROXY_HOPS=0                         # proxies appending X-Forwarded-For; measure on deploy
 ```
 
 Load it through `pydantic-settings` in `core/config.py`. Never read `os.environ` scattered around the code.
 
 - `DATABASE_URL`, `JWT_SECRET` (≥32 chars) and `CRON_SECRET` are required: the app refuses to start without them.
+- `TRUSTED_PROXY_HOPS`: `get_client_ip` (in `core/deps.py`) takes the Nth `X-Forwarded-For` entry from the right. Never trust the leftmost entry. Measure the real hop count (Vercel rewrite → Render) on first deploy.
 - Use Supabase's **Session pooler** URL (port 5432, `*.pooler.supabase.com`). The direct host is IPv6-only (Render can't reach it); the transaction pooler (6543) breaks psycopg prepared statements.
 
 ## Layering rules
@@ -72,8 +76,12 @@ Load it through `pydantic-settings` in `core/config.py`. Never read `os.environ`
 
 ## Data model
 
-Tables: `users`, `organizations`, `instruments`, `applications`, `documents`, `inspections`,
+Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications`, `documents`, `inspections`,
 `inspection_checklist`, `certificates`, `payments` (mocked), `audit_logs`
+
+- `users`: DB check constraints tie `role` to `organization_id` (BUSINESS/GATC need one, officials must not) and require `state_code`/`district_code` for officials.
+- `refresh_tokens`: SHA-256 `token_hash` only, never the raw token.
+- `audit_logs`: append-only. Write rows through `services/audit.log()` in the caller's transaction.
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
   - instrument `instrument_uid`: `LM-JH-DHN-000123`
@@ -102,7 +110,8 @@ Base `/api`. REST + JSON.
 
 ```http
 GET   /api/health                # liveness; ?db=true also pings DB (503 if down)
-POST  /api/auth/{login,register,refresh,logout}
+POST  /api/auth/{login,register,refresh,logout}   GET /api/auth/me
+POST  /api/users                 # SUPER_ADMIN only; creates officials
 CRUD  /api/instruments
 CRUD  /api/applications          PATCH /api/applications/{id}/status
 POST  /api/documents             GET   /api/documents/{id}/url     # signed URL
@@ -126,6 +135,17 @@ GET   /api/public/verify/{certificate_number}                     # no auth
 - 30 days before expiry → reminder. 7 days before → urgent reminder. Past expiry → set `EXPIRED`.
 - Must be idempotent: running it twice in one day sends no duplicate emails.
 
+## Auth and RBAC (spec: `docs/specs/01-login-rbac.md`)
+
+- Protect endpoints with `Depends(require_roles(Role.X, ...))` from `core/deps.py`. The role hierarchy never grants permissions: list the allowed roles explicitly.
+- `get_current_user` reloads the user from the DB on every request. It rejects inactive users and tokens whose `role`/`org_id` claims are stale.
+- Services raise domain errors from `core/errors.py` (`AuthError`, `Forbidden`, `NotFound`, `Conflict`, `RateLimited`), never `HTTPException`.
+- **Commit-then-raise:** after a security-relevant write (failed-login audit, token revocation), `db.commit()` before raising.
+- Cookies: `lm_refresh` (httpOnly, `Path=/api/auth`) holds the refresh token; `lm_session=1` (httpOnly, `Path=/`) is a presence flag for the frontend `proxy.ts`.
+- Refresh rotates on every call. A revoked token seen again within 10 s is a lost race (401, cookies kept); after that it revokes the user's whole token family.
+- Rate limits are in-memory (`core/rate_limit.py`): login 5/min per email + 20/min per IP, register 10/hour per IP. **Production shortcut:** resets on restart, not shared across instances.
+- CORS: browser traffic normally arrives same-origin through the Next.js `/api/*` rewrite. CORS only matters for direct calls.
+
 ## Security (non-negotiable)
 
 - Hash passwords with Argon2 (`argon2-cffi` or `passlib[argon2]`).
@@ -138,6 +158,12 @@ GET   /api/public/verify/{certificate_number}                     # no auth
 - Write an `audit_logs` row on every create, status change, approve/reject and certificate issue.
 - Use SQLAlchemy only. No string-built SQL.
 - Never log secrets, tokens or passwords.
+
+## Testing
+
+- Tests run against a **local Postgres** database (`lm_test`, override with `TEST_DATABASE_URL`). `conftest.py` refuses to run against Supabase.
+- Setup: `brew services start postgresql@15 && createdb lm_test`.
+- Each test run migrates `lm_test` down and up, and each test truncates all tables afterwards. Tests use real commits.
 
 ## Testing priorities
 
