@@ -55,3 +55,19 @@ def test_real_looking_storage_config_accepted(fresh_settings) -> None:  # noqa: 
     fresh_settings.setenv("SUPABASE_URL", "https://rkgyzvzvpciapmfmkvvy.supabase.co")
     fresh_settings.setenv("SUPABASE_SERVICE_ROLE_KEY", "sb_secret_" + "a" * 32)
     assert get_settings().STORAGE_BACKEND == "supabase"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://rkgyzvzvpciapmfmkvvy.supabase.co",
+        "https://rkgyzvzvpciapmfmkvvy.supabase.co/",
+        "https://rkgyzvzvpciapmfmkvvy.supabase.co/rest/v1",
+        "https://rkgyzvzvpciapmfmkvvy.supabase.co/rest/v1/  ",
+    ],
+)
+def test_supabase_url_normalised_to_origin(fresh_settings, url: str) -> None:  # noqa: ANN001
+    fresh_settings.setenv("STORAGE_BACKEND", "supabase")
+    fresh_settings.setenv("SUPABASE_URL", url)
+    fresh_settings.setenv("SUPABASE_SERVICE_ROLE_KEY", "sb_secret_" + "a" * 32)
+    assert get_settings().SUPABASE_URL == "https://rkgyzvzvpciapmfmkvvy.supabase.co"

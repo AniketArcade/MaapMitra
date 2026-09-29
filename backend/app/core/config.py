@@ -1,7 +1,8 @@
 from functools import lru_cache
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,6 +34,16 @@ class Settings(BaseSettings):
     # Number of trusted proxies in front of the app that append to X-Forwarded-For.
     # 0 = use the socket peer address. Measure on deploy (Vercel rewrite -> Render).
     TRUSTED_PROXY_HOPS: int = Field(default=0, ge=0)
+
+    @field_validator("SUPABASE_URL")
+    @classmethod
+    def origin_only(cls, v: str | None) -> str | None:
+        """Keep scheme://host only. The dashboard also shows URLs ending in /rest/v1 (Data API);
+        pasting one would send every Storage call to /rest/v1/storage/v1/... and 404."""
+        if not v:
+            return v
+        parts = urlsplit(v.strip())
+        return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else v.strip()
 
     @model_validator(mode="after")
     def check_storage(self) -> Self:

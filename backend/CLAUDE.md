@@ -66,6 +66,8 @@ Load it through `pydantic-settings` in `core/config.py`. Never read `os.environ`
 - `DATABASE_URL`, `JWT_SECRET` (≥32 chars) and `CRON_SECRET` are required: the app refuses to start without them.
 - With `STORAGE_BACKEND=supabase` (the default), `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are required too; placeholders are rejected at startup. Local commands against `lm_dev`/`lm_test` can set `STORAGE_BACKEND=memory`.
 - In `.env`, never put a `# comment` on the same line as an empty value: python-dotenv reads the comment as the value.
+- `SUPABASE_URL` is normalised to its origin, so a pasted `…/rest/v1` (Data API) URL still works.
+- Configuration errors (`ConfigError`) name the field and reason only, never values.
 - `TRUSTED_PROXY_HOPS`: `get_client_ip` (in `core/deps.py`) takes the Nth `X-Forwarded-For` entry from the right. Never trust the leftmost entry. Measure the real hop count (Vercel rewrite → Render) on first deploy.
 - Use Supabase's **Session pooler** URL (port 5432, `*.pooler.supabase.com`). The direct host is IPv6-only (Render can't reach it); the transaction pooler (6543) breaks psycopg prepared statements.
 
@@ -85,7 +87,7 @@ Workflow for every schema change:
 |---|---|---|
 | `0001` | auth (organizations, users, refresh_tokens, audit_logs) | 2026-09-30 (demo seed run the same day) |
 | `0002` | instruments (+ `instrument_uid_seq`, 3 enums, functional unique index) | 2026-09-30 (seed: `OTH-0001`) |
-| `0003` | applications, application_status_history, documents (+ `application_number_seq`, 3 enums, partial unique index) | **pending** (needs Supabase Storage keys in `.env`) |
+| `0003` | applications, application_status_history, documents (+ `application_number_seq`, 3 enums, partial unique index) | 2026-09-30 (bucket `documents` created; seed: `APP-2026-000001` for `OTH-0001`) |
 
 ## Layering rules
 
