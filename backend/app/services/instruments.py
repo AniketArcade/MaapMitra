@@ -190,7 +190,7 @@ def get(
     """One scoped query: missing and out-of-scope are indistinguishable (404)."""
     stmt = _scoped(user).where(Instrument.id == instrument_id)
     if for_update:
-        stmt = stmt.with_for_update(of=Instrument)
+        stmt = stmt.with_for_update(of=Instrument).execution_options(populate_existing=True)
     instrument = db.scalar(stmt)
     if instrument is None:
         raise NotFound("Instrument not found")

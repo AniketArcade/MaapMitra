@@ -83,6 +83,7 @@ def upload(
     data: bytes,
     ip: str,
 ) -> Document:
+    document_type = DocumentType(document_type)  # accept the enum or its string value
     if not upload_window.hit(str(user.id)):
         raise RateLimited("Too many uploads. Try again later.")
 
@@ -116,8 +117,12 @@ def upload(
     try:
         # Re-check under the application row lock: serialises with submit, delete and
         # concurrent uploads, so no document can appear after submit or exceed the limit.
+        # populate_existing: the session still caches the pre-upload copy of this row.
         locked = db.scalar(
-            select(Application).where(Application.id == application.id).with_for_update()
+            select(Application)
+            .where(Application.id == application.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if locked is None or locked.status != ApplicationStatus.DRAFT:
             raise Conflict("Documents can only be added to a draft application")
@@ -195,7 +200,10 @@ def signed_url(db: Session, user: User, document_id: uuid.UUID, *, ip: str) -> s
 def delete(db: Session, user: User, document_id: uuid.UUID, *, ip: str) -> None:
     document = _load(db, user, document_id)
     application = db.scalar(
-        select(Application).where(Application.id == document.application_id).with_for_update()
+        select(Application)
+        .where(Application.id == document.application_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if application is None or application.status != ApplicationStatus.DRAFT:
         raise Conflict("Documents can only be removed from a draft application")

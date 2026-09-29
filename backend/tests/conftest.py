@@ -28,9 +28,10 @@ from app.core.roles import OrgType, Role  # noqa: E402
 from app.core.security import create_access_token, hash_password  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import create_app  # noqa: E402
-from app.models import Instrument, Organization, User  # noqa: E402
+from app.models import Application, Instrument, Organization, User  # noqa: E402
 from app.schemas.instrument import InstrumentCreate  # noqa: E402
 from app.services import instruments as instruments_service  # noqa: E402
+from app.storage import MemoryStorage, get_storage  # noqa: E402
 
 PASSWORD = "Password123!"
 BASE_URL = "https://testserver"  # cookies are Secure outside ENV=development
@@ -49,10 +50,16 @@ def _migrate() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def _clean() -> Iterator[None]:
     reset_rate_limits()
+    storage = get_storage()
+    assert isinstance(storage, MemoryStorage)
+    storage.clear()
     yield
     with engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE audit_logs, instruments, refresh_tokens, users, organizations CASCADE")
+            text(
+                "TRUNCATE audit_logs, documents, application_status_history, applications, "
+                "instruments, refresh_tokens, users, organizations CASCADE"
+            )
         )
 
 
@@ -153,5 +160,103 @@ def make_instrument(db: Session) -> Callable[..., Instrument]:
             body = InstrumentCreate.model_validate(instrument_body(**overrides))
             instrument = instruments_service.create(s, user, body, ip="test")
             return instrument
+
+    return _make
+
+
+# Smallest byte strings that pass magic-byte sniffing.
+PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+
+
+@pytest.fixture
+def storage() -> MemoryStorage:
+    s = get_storage()
+    assert isinstance(s, MemoryStorage)
+    return s
+
+
+def upload(
+    client: TestClient,
+    owner: User,
+    application_id: object,
+    document_type: str = "PROOF_OF_OWNERSHIP",
+    data: bytes = PDF_BYTES,
+    filename: str = "invoice.pdf",
+    content_type: str = "application/pdf",
+):  # noqa: ANN201
+    return client.post(
+        "/api/documents",
+        data={"application_id": str(application_id), "document_type": document_type},
+        files={"file": (filename, data, content_type)},
+        headers=auth_header(owner),
+    )
+
+
+@pytest.fixture
+def make_application(make_user, make_instrument) -> Callable[..., Application]:  # noqa: ANN001
+    """Creates an application through the services and advances it to `status`."""
+    from app.core.application_types import ApplicationStatus as S  # noqa: N817
+    from app.schemas.application import ApplicationCreate, StatusChange
+    from app.services import applications as app_service
+    from app.services import documents as doc_service
+
+    def _make(
+        owner: User | None = None,
+        instrument: Instrument | None = None,
+        *,
+        application_type: str = "VERIFICATION",
+        status: str = "DRAFT",
+        officer: User | None = None,
+    ) -> Application:
+        owner = owner or make_user(Role.BUSINESS)
+        instrument = instrument or make_instrument(owner)
+        with SessionLocal() as s:
+            user = s.get(User, owner.id)
+            application = app_service.create(
+                s,
+                user,
+                ApplicationCreate(instrument_id=instrument.id, application_type=application_type),
+                ip="test",
+            )
+            target = S(status)
+            if target == S.DRAFT:
+                return application
+            required = (
+                ["PROOF_OF_OWNERSHIP", "INSTRUMENT_PHOTO"]
+                if application_type == "VERIFICATION"
+                else ["INSTRUMENT_PHOTO", "PREVIOUS_CERTIFICATE"]
+            )
+            for kind in required:
+                doc_service.upload(
+                    s,
+                    user,
+                    application_id=application.id,
+                    document_type=kind,
+                    filename=f"{kind.lower()}.pdf",
+                    data=PDF_BYTES,
+                    ip="test",
+                )
+            app_service.transition(
+                s, user, application.id, StatusChange(status=S.SUBMITTED), ip="test"
+            )
+            if target == S.SUBMITTED:
+                return app_service.load(s, user, application.id)
+            reviewer = s.get(User, (officer or make_user(Role.LM_OFFICER)).id)
+            app_service.transition(
+                s, reviewer, application.id, StatusChange(status=S.DOCUMENT_REVIEW), ip="test"
+            )
+            if target == S.REJECTED:
+                app_service.transition(
+                    s,
+                    reviewer,
+                    application.id,
+                    StatusChange(status=S.REJECTED, note="Invoice is not legible"),
+                    ip="test",
+                )
+            elif target != S.DOCUMENT_REVIEW:
+                raise ValueError(f"factory can't reach {status}")
+            return app_service.load(s, user, application.id)
 
     return _make

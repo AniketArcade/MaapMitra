@@ -93,7 +93,7 @@ def load(
             selectinload(Application.history).joinedload(ApplicationStatusHistory.actor),
         )
     if for_update:
-        stmt = stmt.with_for_update(of=Application)
+        stmt = stmt.with_for_update(of=Application).execution_options(populate_existing=True)
     application = db.scalar(stmt)
     if application is None:
         raise NotFound("Application not found")
