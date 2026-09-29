@@ -172,11 +172,17 @@ def _load(db: Session, user: User, document_id: uuid.UUID) -> Document:
     return document
 
 
-def signed_url(db: Session, user: User, document_id: uuid.UUID, *, ip: str) -> str:
+def signed_url(
+    db: Session, user: User, document_id: uuid.UUID, *, download: bool = False, ip: str
+) -> str:
+    """download=False: the link displays the file inline (View). True: it saves the file
+    under its sanitized original name (Download)."""
     document = _load(db, user, document_id)
     try:
         url = get_storage().signed_url(
-            document.storage_path, SIGNED_URL_SECONDS, document.original_filename
+            document.storage_path,
+            SIGNED_URL_SECONDS,
+            document.original_filename if download else None,
         )
     except StorageError:
         raise BadGateway("Could not create a download link, please retry") from None
@@ -190,6 +196,7 @@ def signed_url(db: Session, user: User, document_id: uuid.UUID, *, ip: str) -> s
         details={
             "application_id": str(document.application_id),
             "document_type": document.document_type.value,
+            "disposition": "attachment" if download else "inline",
         },
         ip=ip,
     )

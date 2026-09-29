@@ -54,7 +54,7 @@ frontend/
 - **All data comes from the FastAPI backend through `lib/api.ts`.** No direct Supabase or DB calls, and no `fetch` scattered in components.
 - **Never hard-code application statuses, application types or document types either:** use `getApplicationMeta()` (`GET /applications/meta`) and `labelFor()`.
 - Status-change buttons come only from `ApplicationDetail.allowed_actions`. Submit is also disabled until every required document is satisfied.
-- **Opening a document:** call `window.open("", "_blank")` synchronously in the click handler, then set its location once `GET /documents/{id}/url` returns; close it on failure (popup blockers).
+- **Viewing a document:** call `window.open("", "_blank")` synchronously in the click handler, then set its location to the `?disposition=inline` URL; close it on failure (popup blockers). **Downloading:** fetch `?disposition=attachment` and `window.location.assign()` it.
 - `lib/api.ts` never sets `Content-Type` for `FormData` bodies.
 - **Never hard-code instrument types, units, accuracy classes or regions.** Load them with `getInstrumentMeta()` (`lib/meta.ts`, cached `GET /instruments/meta`). Show names, send codes.
 - Pages behind login use `components/app-shell.tsx` in their `layout.tsx` (auth guard + header nav).

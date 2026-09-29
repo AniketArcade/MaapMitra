@@ -1,5 +1,5 @@
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Form, Request, UploadFile, status
 from starlette.concurrency import run_in_threadpool
@@ -50,8 +50,16 @@ async def upload_document(
 
 
 @router.get("/{document_id}/url")
-def document_url(request: Request, document_id: uuid.UUID, user: Reader, db: DB) -> DocumentUrl:
-    url = service.signed_url(db, user, document_id, ip=get_client_ip(request))
+def document_url(
+    request: Request,
+    document_id: uuid.UUID,
+    user: Reader,
+    db: DB,
+    disposition: Literal["inline", "attachment"] = "inline",
+) -> DocumentUrl:
+    url = service.signed_url(
+        db, user, document_id, download=disposition == "attachment", ip=get_client_ip(request)
+    )
     return DocumentUrl(url=url, expires_in=SIGNED_URL_SECONDS)
 
 

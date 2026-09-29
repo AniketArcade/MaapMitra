@@ -221,9 +221,20 @@ def test_signed_url(client: TestClient, make_user, make_application) -> None:  #
     body = res.json()
     assert body["expires_in"] <= 300
     assert body["url"].startswith("https://")
-    assert unquote(body["url"]).endswith("download=my invoice.pdf")
+    assert "download=" not in body["url"]  # View: served inline
+    attachment = client.get(
+        f"/api/documents/{doc_id}/url?disposition=attachment", headers=auth_header(owner)
+    ).json()["url"]
+    assert unquote(attachment).endswith("download=my invoice.pdf")
+    assert (
+        client.get(
+            f"/api/documents/{doc_id}/url?disposition=evil", headers=auth_header(owner)
+        ).status_code
+        == 422
+    )
     rows = audit_rows("DOCUMENT_URL_ISSUED")  # committed: visible from a fresh session
-    assert len(rows) == 1 and rows[0].actor_user_id == owner.id
+    assert len(rows) == 2 and all(r.actor_user_id == owner.id for r in rows)
+    assert {r.details["disposition"] for r in rows} == {"inline", "attachment"}
     assert rows[0].organization_id == owner.organization_id
     # Officials can't reach it while the application is a draft
     assert (

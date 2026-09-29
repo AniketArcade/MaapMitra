@@ -153,8 +153,8 @@ Drop any path components; remove control characters, quotes, backslashes and `;`
 ### Download link (`GET /api/documents/{id}/url`)
 - Scoped through the application (404 otherwise; officials never reach DRAFT documents).
 - Returns `{ "url": <absolute Supabase signed URL>, "expires_in": 300 }`. The Storage API returns a **relative** path; the wrapper builds the absolute URL (`{SUPABASE_URL}/storage/v1` + path). Verify the exact format against the Supabase docs during implementation.
-- Includes `download=<sanitized filename>`.
-- Writes `DOCUMENT_URL_ISSUED` (D9) and **commits it** even though this is a GET (§2.4).
+- `?disposition=inline` (default) serves the file for **viewing** in the browser. `?disposition=attachment` adds `download=<sanitized filename>`, which forces a download with that name. *(Amended after testing: a `download=` link on View made browsers save the file and close the new tab, so nothing appeared to open.)*
+- Writes `DOCUMENT_URL_ISSUED` (D9) with the disposition and **commits it** even though this is a GET (§2.4).
 - Accepted risk: a signed link works for anyone holding it until it expires (5 minutes).
 
 ### Delete (`DELETE /api/documents/{id}`)

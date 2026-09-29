@@ -122,10 +122,12 @@ export default function ApplicationDetailPage() {
 
   async function onView(documentId: string) {
     // Open the tab synchronously (inside the click) so popup blockers allow it,
-    // then point it at the short-lived signed URL.
+    // then point it at the short-lived signed URL (served inline, so the browser displays it).
     const tab = window.open("", "_blank");
     try {
-      const { url } = await api<{ url: string; expires_in: number }>(`/documents/${documentId}/url`);
+      const { url } = await api<{ url: string; expires_in: number }>(
+        `/documents/${documentId}/url?disposition=inline`,
+      );
       if (tab) {
         tab.opener = null;
         tab.location.href = url;
@@ -134,6 +136,18 @@ export default function ApplicationDetailPage() {
       }
     } catch (err) {
       tab?.close();
+      setActionError(errorMessage(err));
+    }
+  }
+
+  async function onDownload(documentId: string) {
+    setActionError(null);
+    try {
+      const { url } = await api<{ url: string; expires_in: number }>(
+        `/documents/${documentId}/url?disposition=attachment`,
+      );
+      window.location.assign(url); // Content-Disposition: attachment, so the page stays put
+    } catch (err) {
       setActionError(errorMessage(err));
     }
   }
@@ -275,6 +289,9 @@ export default function ApplicationDetailPage() {
                         <span className="flex gap-2">
                           <Button variant="outline" size="sm" onClick={() => void onView(d.id)}>
                             View
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => void onDownload(d.id)}>
+                            Download
                           </Button>
                           {editable ? (
                             <Button variant="ghost" size="sm" onClick={() => void onDeleteDocument(d.id)}>

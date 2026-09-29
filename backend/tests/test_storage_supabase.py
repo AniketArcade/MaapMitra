@@ -47,11 +47,12 @@ def test_signed_url_is_absolute_with_download_name() -> None:
             200, json={"signedURL": "/object/sign/documents/applications/a/b.pdf?token=abc"}
         )
 
-    url = _storage(handler).signed_url("applications/a/b.pdf", 300, "my invoice.pdf")
-    assert url == (
-        "https://proj.supabase.co/storage/v1/object/sign/documents/applications/a/b.pdf"
-        "?token=abc&download=my%20invoice.pdf"
+    base = (
+        "https://proj.supabase.co/storage/v1/object/sign/documents/applications/a/b.pdf?token=abc"
     )
+    assert _storage(handler).signed_url("applications/a/b.pdf", 300, None) == base
+    url = _storage(handler).signed_url("applications/a/b.pdf", 300, "my invoice.pdf")
+    assert url == f"{base}&download=my%20invoice.pdf"
 
 
 def test_delete_request() -> None:

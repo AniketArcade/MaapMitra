@@ -26,13 +26,11 @@ class MemoryStorage:
         for path in paths:
             self.objects.pop(path, None)
 
-    def signed_url(self, path: str, expires_in: int, download_name: str) -> str:
+    def signed_url(self, path: str, expires_in: int, download_name: str | None) -> str:
         if path not in self.objects:
             raise StorageError("object not found")
-        return (
-            f"https://storage.test/object/sign/{quote(path)}"
-            f"?token=test&expires_in={expires_in}&download={quote(download_name)}"
-        )
+        url = f"https://storage.test/object/sign/{quote(path)}?token=test&expires_in={expires_in}"
+        return f"{url}&download={quote(download_name)}" if download_name else url
 
     def clear(self) -> None:
         self.objects.clear()

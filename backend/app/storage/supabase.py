@@ -58,7 +58,7 @@ class SupabaseStorage:
                 "delete", "DELETE", f"/object/{quote(self.bucket)}", json={"prefixes": paths}
             )
 
-    def signed_url(self, path: str, expires_in: int, download_name: str) -> str:
+    def signed_url(self, path: str, expires_in: int, download_name: str | None) -> str:
         response = self._call(
             "sign", "POST", f"/object/sign/{self._object(path)}", json={"expiresIn": expires_in}
         )
@@ -66,8 +66,11 @@ class SupabaseStorage:
         if not relative:
             raise StorageError("storage sign returned no URL")
         # The API returns a path relative to /storage/v1 (e.g. "/object/sign/...?token=...").
+        url = f"{self.base}{relative}"
+        if download_name is None:
+            return url  # inline: the browser displays it (Content-Type is the sniffed type)
         separator = "&" if "?" in relative else "?"
-        return f"{self.base}{relative}{separator}download={quote(download_name)}"
+        return f"{url}{separator}download={quote(download_name)}"  # Content-Disposition: attachment
 
     def ensure_bucket(self, *, file_size_limit: int, allowed_mime_types: list[str]) -> bool:
         """Create the private bucket if missing. Returns True if it was created."""

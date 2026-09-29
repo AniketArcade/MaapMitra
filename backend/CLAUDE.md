@@ -201,7 +201,7 @@ DELETE /api/documents/{id}         # BUSINESS, DRAFT only
 - `app/storage/`: `Storage` protocol; `SupabaseStorage` (REST via `httpx2`, service role key, no SDK) and `MemoryStorage` (tests). `get_storage()` picks one by `STORAGE_BACKEND`. The key is never logged (errors log the operation and status only).
 - `BodySizeLimitMiddleware` (`app/middleware/body_limit.py`) runs before multipart parsing on `POST /api/documents`: no `Content-Length` → 411; over 10 MiB + 64 KiB → 413 without reading; streamed overflow → 413.
 - Upload order: rate limit (60/hour/user) → scope + DRAFT + count pre-checks → read ≤10 MiB + 1 → sniff magic bytes (PDF/PNG/JPEG only) → `storage.put` **outside** any lock (failure → 502) → lock the application row, re-check DRAFT and count, insert, audit, commit → on any failure after `put`, best-effort delete of the object. Rare orphans are an accepted MVP risk.
-- Signed URLs: 300 s, `download=<sanitized filename>`, audited as `DOCUMENT_URL_ISSUED`.
+- Signed URLs: 300 s, audited as `DOCUMENT_URL_ISSUED`. `GET /documents/{id}/url?disposition=inline` (default, View) has no `download=`, so browsers display it; `?disposition=attachment` adds `download=<sanitized filename>`.
 - The bucket is private, with bucket-level size and MIME limits (`python -m app.cli create-bucket`).
 
 ## Security (non-negotiable)
