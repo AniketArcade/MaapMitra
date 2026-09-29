@@ -9,7 +9,7 @@ from app.core.cookies import clear_auth_cookies
 from app.core.errors import DomainError, Unprocessable
 from app.core.rate_limit import limiter
 from app.middleware.body_limit import BodySizeLimitMiddleware
-from app.routers import auth, health, instruments, users
+from app.routers import applications, auth, documents, health, instruments, users
 
 
 async def domain_error_handler(_: Request, exc: Exception) -> JSONResponse:
@@ -54,7 +54,14 @@ def create_app() -> FastAPI:
         max_bytes=MAX_UPLOAD_REQUEST_BYTES,
     )
 
-    for router in (health.router, auth.router, users.router, instruments.router):
+    for router in (
+        health.router,
+        auth.router,
+        users.router,
+        instruments.router,
+        applications.router,
+        documents.router,
+    ):
         app.include_router(router, prefix="/api")
     return app
 

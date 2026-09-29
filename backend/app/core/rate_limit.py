@@ -37,8 +37,10 @@ class SlidingWindow:
 
 
 login_email_window = SlidingWindow(limit=5, window_seconds=60)
+upload_window = SlidingWindow(limit=60, window_seconds=3600)  # per user
 
 
 def reset_rate_limits() -> None:
     limiter.reset()
     login_email_window.reset()
+    upload_window.reset()

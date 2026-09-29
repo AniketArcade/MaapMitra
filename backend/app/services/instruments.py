@@ -6,7 +6,9 @@ from typing import Any
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm.attributes import set_committed_value
 
+from app.core.application_types import ApplicationStatus
 from app.core.errors import Conflict, NotFound, Unprocessable
 from app.core.instrument_types import TYPE_LABELS, UNIT_FAMILY, CapacityUnit, InstrumentType
 from app.core.regions import is_valid_region, is_valid_state
@@ -15,6 +17,22 @@ from app.models.user import User
 from app.schemas.instrument import InstrumentCreate, InstrumentUpdate
 from app.services import audit
 from app.services.scoping import scope_instruments
+
+# Locked while the instrument has a non-terminal application (spec 03 §9).
+# address / latitude / longitude stay editable until step 5.
+LOCKED_FIELDS = frozenset(
+    {
+        "manufacturer",
+        "model",
+        "serial_number",
+        "capacity",
+        "capacity_unit",
+        "accuracy_class",
+        "state_code",
+        "district_code",
+    }
+)
+HAS_APPLICATIONS = "This instrument has applications and can't be deleted"
 
 DUPLICATE = (
     "An instrument with this manufacturer and serial number is already registered. "
@@ -68,7 +86,9 @@ def _jsonable(value: Any) -> Any:
 
 
 def _scoped(user: User) -> Select[tuple[Instrument]]:
-    stmt = select(Instrument).options(joinedload(Instrument.organization))
+    stmt = select(Instrument).options(
+        joinedload(Instrument.organization), joinedload(Instrument.active_application)
+    )
     return scope_instruments(stmt, user)
 
 
@@ -112,6 +132,7 @@ def create(db: Session, user: User, body: InstrumentCreate, *, ip: str) -> Instr
         ip=ip,
     )
     db.commit()
+    set_committed_value(instrument, "active_application", None)  # brand new: none yet
     return instrument
 
 
@@ -155,7 +176,7 @@ def list_instruments(
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     items = db.scalars(
-        stmt.options(joinedload(Instrument.organization))
+        stmt.options(joinedload(Instrument.organization), joinedload(Instrument.active_application))
         .order_by(Instrument.created_at.desc(), Instrument.id)
         .limit(limit)
         .offset(offset)
@@ -189,6 +210,13 @@ def update(
     if not changes:
         db.commit()  # releases the row lock; no UPDATE is issued, so updated_at is unchanged
         return instrument
+
+    active = instrument.active_application
+    if active is not None and changes.keys() & LOCKED_FIELDS:
+        message = "This instrument has an application in progress; these details can't be changed."
+        if active.status == ApplicationStatus.DRAFT:
+            message += " Delete the draft to edit them."
+        raise Conflict(message)
 
     merged = {
         field: sent.get(field, getattr(instrument, field))
@@ -230,4 +258,9 @@ def delete(db: Session, user: User, instrument_id: uuid.UUID, *, ip: str) -> Non
         ip=ip,
     )
     db.delete(instrument)
+    try:
+        db.flush()  # the RESTRICT foreign key from applications fires here
+    except IntegrityError as exc:
+        db.rollback()
+        raise Conflict(HAS_APPLICATIONS) from exc
     db.commit()

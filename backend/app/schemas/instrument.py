@@ -5,6 +5,7 @@ from typing import Annotated, Self
 
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
+from app.core.application_types import ApplicationStatus
 from app.core.instrument_types import (
     TYPE_LABELS,
     UNIT_FAMILY,
@@ -13,7 +14,9 @@ from app.core.instrument_types import (
     InstrumentType,
 )
 from app.core.regions import REGIONS
+from app.core.roles import Role
 from app.models.instrument import Instrument
+from app.models.user import User
 from app.schemas.common import DistrictCode, Serial, StateCode, StrictModel, Text100, Text500
 
 
@@ -66,6 +69,12 @@ class InstrumentUpdate(StrictModel):
         return self
 
 
+class ActiveApplicationRef(BaseModel):
+    id: uuid.UUID
+    application_number: str
+    status: ApplicationStatus
+
+
 class InstrumentOut(BaseModel):
     id: uuid.UUID
     instrument_uid: str
@@ -85,9 +94,18 @@ class InstrumentOut(BaseModel):
     longitude: float | None
     created_at: datetime
     updated_at: datetime
+    active_application: ActiveApplicationRef | None = None
 
     @classmethod
-    def from_model(cls, i: Instrument) -> Self:
+    def from_model(cls, i: Instrument, viewer: User | None = None) -> Self:
+        active = i.active_application
+        # Officials never see drafts (spec 03 §4), so a draft is reported as "none".
+        if (
+            active is not None
+            and active.status == ApplicationStatus.DRAFT
+            and (viewer is None or viewer.role != Role.BUSINESS)
+        ):
+            active = None
         return cls(
             id=i.id,
             instrument_uid=i.instrument_uid,
@@ -107,6 +125,15 @@ class InstrumentOut(BaseModel):
             longitude=float(i.longitude) if i.longitude is not None else None,
             created_at=i.created_at,
             updated_at=i.updated_at,
+            active_application=(
+                ActiveApplicationRef(
+                    id=active.id,
+                    application_number=active.application_number,
+                    status=active.status,
+                )
+                if active is not None
+                else None
+            ),
         )
 
 

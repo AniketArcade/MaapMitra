@@ -8,7 +8,10 @@ from typing import Any
 
 from sqlalchemy import Select, false
 
+from app.core.application_types import ApplicationStatus
 from app.core.roles import Role
+from app.models.application import Application
+from app.models.document import Document
 from app.models.instrument import Instrument
 from app.models.user import User
 
@@ -32,3 +35,36 @@ def scope_instruments(stmt: Select[Any], user: User) -> Select[Any]:
             Instrument.district_code == user.district_code,
         )
     return stmt.where(false())
+
+
+def scope_applications(stmt: Select[Any], user: User) -> Select[Any]:
+    """Business: own org, every status. Officials: jurisdiction, and never DRAFT
+    (a draft is the business's unfinished work; officer queues start at SUBMITTED)."""
+    if user.role == Role.BUSINESS:
+        if user.organization_id is None:
+            return stmt.where(false())
+        return stmt.where(Application.organization_id == user.organization_id)
+
+    not_draft = Application.status != ApplicationStatus.DRAFT
+    if user.role == Role.SUPER_ADMIN:
+        return stmt.where(not_draft)
+    if user.role == Role.STATE_ADMIN:
+        if not user.state_code:
+            return stmt.where(false())
+        return stmt.where(not_draft, Application.state_code == user.state_code)
+    if user.role in (Role.DISTRICT_ADMIN, Role.LM_OFFICER):
+        if not user.state_code or not user.district_code:
+            return stmt.where(false())
+        return stmt.where(
+            not_draft,
+            Application.state_code == user.state_code,
+            Application.district_code == user.district_code,
+        )
+    return stmt.where(false())
+
+
+def scope_documents(stmt: Select[Any], user: User) -> Select[Any]:
+    """Documents are only ever reached through their application's scope."""
+    return scope_applications(
+        stmt.join(Application, Document.application_id == Application.id), user
+    )

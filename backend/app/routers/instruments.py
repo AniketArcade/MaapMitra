@@ -35,7 +35,7 @@ def create_instrument(
     request: Request, body: InstrumentCreate, user: Owner, db: DB
 ) -> InstrumentOut:
     instrument = service.create(db, user, body, ip=get_client_ip(request))
-    return InstrumentOut.from_model(instrument)
+    return InstrumentOut.from_model(instrument, user)
 
 
 @router.get("")
@@ -59,7 +59,7 @@ def list_instruments(
         offset=paging.offset,
     )
     return Page(
-        items=[InstrumentOut.from_model(i) for i in items],
+        items=[InstrumentOut.from_model(i, user) for i in items],
         total=total,
         page=paging.page,
         page_size=paging.page_size,
@@ -68,7 +68,7 @@ def list_instruments(
 
 @router.get("/{instrument_id}")
 def get_instrument(instrument_id: uuid.UUID, user: Reader, db: DB) -> InstrumentOut:
-    return InstrumentOut.from_model(service.get(db, user, instrument_id))
+    return InstrumentOut.from_model(service.get(db, user, instrument_id), user)
 
 
 @router.patch("/{instrument_id}")
@@ -76,7 +76,7 @@ def update_instrument(
     request: Request, instrument_id: uuid.UUID, body: InstrumentUpdate, user: Owner, db: DB
 ) -> InstrumentOut:
     instrument = service.update(db, user, instrument_id, body, ip=get_client_ip(request))
-    return InstrumentOut.from_model(instrument)
+    return InstrumentOut.from_model(instrument, user)
 
 
 @router.delete("/{instrument_id}", status_code=status.HTTP_204_NO_CONTENT)
