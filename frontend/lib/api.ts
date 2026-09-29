@@ -1,5 +1,5 @@
 // Single typed API client. Client-side only: it calls the same-origin /api/* rewrite.
-import type { AuthResponse } from "@/lib/types";
+import type { ApplicationStats, AuthResponse } from "@/lib/types";
 
 type ValidationIssue = { loc: (string | number)[]; msg: string };
 
@@ -115,4 +115,10 @@ export async function api<T>(path: string, init: RequestInit = {}, options: ApiO
 export function uploadDocument<T>(form: FormData): Promise<T> {
   const origin = process.env.NEXT_PUBLIC_UPLOAD_ORIGIN || undefined;
   return api<T>("/documents", { method: "POST", body: form }, { origin });
+}
+
+// Not cached like getApplicationMeta/getInstrumentMeta: dashboard sections refetch this
+// on retry and on tab focus, so a stale cached promise would defeat both.
+export function getApplicationStats(): Promise<ApplicationStats> {
+  return api<ApplicationStats>("/applications/stats");
 }

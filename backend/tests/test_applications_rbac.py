@@ -69,4 +69,13 @@ def test_meta(client: TestClient, make_user) -> None:  # noqa: ANN001
         "max_documents": 10,
         "allowed_content_types": ["application/pdf", "image/jpeg", "image/png"],
     }
-    assert [s["value"] for s in body["statuses"]][0] == "DRAFT"
+    assert [s["value"] for s in body["statuses"]] == [
+        "DRAFT",
+        "SUBMITTED",
+        "DOCUMENT_REVIEW",
+        "SCHEDULED",
+        "INSPECTION",
+        "APPROVED",
+        "REJECTED",
+        "CERTIFICATE_ISSUED",
+    ]

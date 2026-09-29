@@ -62,7 +62,7 @@ PostGIS · Leaflet maps · pgvector/RAG · OCR · Celery/Redis · native mobile 
 1. Login + RBAC ✅ (spec `docs/specs/01-login-rbac.md`)
 2. Instrument registration ✅ (spec `docs/specs/02-instruments.md`)
 3. Application + document upload ✅ (spec `docs/specs/03-applications.md`)
-4. Business dashboard
+4. Business dashboard ✅ (spec `docs/specs/04-business-dashboard.md`)
 5. Officer dashboard
 6. Inspection checklist + measurements
 7. Approve/reject workflow

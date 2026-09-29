@@ -202,6 +202,15 @@ def list_applications(
     return list(items), total
 
 
+def stats(db: Session, user: User) -> dict[ApplicationStatus, int]:
+    """Counts by status, same scoping as list_applications: always consistent with
+    what GET /applications?status=... would return for this caller."""
+    stmt = scope_applications(
+        select(Application.status, func.count()).group_by(Application.status), user
+    )
+    return dict(db.execute(stmt).all())
+
+
 def _require_draft(application: Application, what: str) -> None:
     if application.status != S.DRAFT:
         raise Conflict(f"Only draft applications can be {what}")

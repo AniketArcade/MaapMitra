@@ -135,6 +135,8 @@ export type ApplicationDetail = Application & {
   allowed_actions: string[];
 };
 
+export type ApplicationStats = { total: number; by_status: Record<string, number> };
+
 export type LabelledValue = { value: string; label: string };
 
 export type ApplicationMeta = {

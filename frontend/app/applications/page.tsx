@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/applications/status-badge";
 import { StateMessage } from "@/components/instruments/state-message";
@@ -33,16 +33,34 @@ type State =
 function ApplicationsList() {
   const { user } = useAuth();
   const isBusiness = user?.role === "BUSINESS";
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [meta, setMeta] = useState<ApplicationMeta | null>(null);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [status, setStatus] = useState(useSearchParams().get("status") ?? ALL);
   const [page, setPage] = useState(1);
   const [state, setState] = useState<State>({ kind: "loading" });
 
   useEffect(() => {
     getApplicationMeta().then(setMeta, () => undefined);
   }, []);
+
+  // Derived from the URL every render (not just a useState initializer) so a link elsewhere
+  // that changes ?status= while this page is already mounted (e.g. Back/Forward) takes effect.
+  // Until meta has loaded there's nothing to validate an unknown value against, so it's
+  // treated as "no filter" rather than sent straight to the backend (which would 422 on it).
+  const knownStatuses = useMemo(
+    () => new Set((meta?.statuses ?? []).map((s) => s.value)),
+    [meta],
+  );
+  const rawStatus = searchParams.get("status");
+  const status = rawStatus && knownStatuses.has(rawStatus) ? rawStatus : ALL;
+
+  function setStatus(value: string): void {
+    const qs = value && value !== ALL ? `?status=${encodeURIComponent(value)}` : "";
+    router.replace(`/applications${qs}`);
+    setPage(1);
+  }
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -113,10 +131,7 @@ function ApplicationsList() {
           label="Status"
           value={status}
           options={statusOptions}
-          onChange={(v) => {
-            setStatus(v || ALL);
-            setPage(1);
-          }}
+          onChange={(v) => setStatus(v || ALL)}
         />
       </div>
 
