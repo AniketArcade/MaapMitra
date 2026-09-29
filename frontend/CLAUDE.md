@@ -84,7 +84,6 @@ frontend/
 | `/instruments/[id]/edit` | Business | Same form; type is read-only; PATCH sends only changed fields |
 | `/applications` | Business, officials | List + status filter (`?status=`) + search; officials never see drafts |
 | `/applications/new?instrument_id=` | Business | Instrument without an active application → type → notes → Create draft |
-| `/applications/new` | Business | Pick instrument → type → upload docs → submit |
 | `/applications/[id]` | Business, officials | Requirements checklist, per-type upload (draft), View/Remove, Submit / Start review / Reject, timeline |
 | `/inspections/[id]` | Officer | **Mobile-first** field flow (below) |
 | `/certificates/[id]` | Business | Download PDF, show QR |
