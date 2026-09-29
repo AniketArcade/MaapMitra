@@ -7,21 +7,36 @@ PRODUCTION SHORTCUT: delete these accounts after the hackathon.
 import argparse
 import sys
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.roles import OrgType, Role
 from app.core.security import hash_password
 from app.db.session import SessionLocal
+from app.models.instrument import Instrument
 from app.models.organization import Organization
 from app.models.user import User
+from app.schemas.instrument import InstrumentCreate
+from app.services import instruments as instruments_service
 
 ORGS = [
     {"name": "ABC Traders", "state_code": "JH", "district_code": "DHN"},
     # Second business, used to demo and test org isolation.
     {"name": "Other Traders", "state_code": "JH", "district_code": "DHN"},
 ]
+
+DEMO_INSTRUMENT = {
+    "instrument_type": "WEIGHING_SCALE",
+    "manufacturer": "Demo Scales",
+    "model": "DS-30",
+    "serial_number": "OTH-0001",
+    "capacity": 30,
+    "capacity_unit": "kg",
+    "address": "Other Traders shop, Dhanbad",
+    "state_code": "JH",
+    "district_code": "DHN",
+}
 
 USERS = [
     {"email": "admin@lm.demo", "full_name": "Demo Super Admin", "role": Role.SUPER_ADMIN},
@@ -90,6 +105,20 @@ def seed(db: Session, password: str) -> list[str]:
         )
         created.append(f"user {spec['email']}")
     db.commit()
+
+    # Other Traders' instrument, used to demo org isolation. XYZ12345 is registered live
+    # by ABC Traders during the demo, so it is deliberately NOT seeded.
+    owner = db.scalar(select(User).where(User.email == "owner@othertraders.demo"))
+    exists = db.scalar(
+        select(Instrument).where(
+            func.lower(Instrument.manufacturer) == DEMO_INSTRUMENT["manufacturer"].lower(),
+            Instrument.serial_number == DEMO_INSTRUMENT["serial_number"],
+        )
+    )
+    if owner is not None and exists is None:
+        body = InstrumentCreate.model_validate(DEMO_INSTRUMENT)
+        instrument = instruments_service.create(db, owner, body, ip="seed")
+        created.append(f"instrument {instrument.serial_number} ({instrument.instrument_uid})")
     return created
 
 
