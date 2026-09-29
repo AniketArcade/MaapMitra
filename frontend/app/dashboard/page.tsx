@@ -1,8 +1,46 @@
 "use client";
 
+import Link from "next/link";
+import { useEffect, useState } from "react";
+
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { ADMIN_ROLES, type User } from "@/lib/types";
+import { ADMIN_ROLES, type Instrument, type Page, type User } from "@/lib/types";
+
+function InstrumentCount() {
+  const [total, setTotal] = useState<number | null>(null);
+  useEffect(() => {
+    api<Page<Instrument>>("/instruments?page_size=1").then(
+      (page) => setTotal(page.total),
+      () => setTotal(null),
+    );
+  }, []);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <span className="text-sm">
+        {total === null ? "Registered instruments" : `${total} registered instrument${total === 1 ? "" : "s"}`}
+      </span>
+      <div className="flex gap-2">
+        <Link href="/instruments" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          View all
+        </Link>
+        <Link href="/instruments/new" className={buttonVariants({ size: "sm" })}>
+          Register instrument
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function JurisdictionLink() {
+  return (
+    <Link href="/instruments" className={buttonVariants({ variant: "outline", size: "sm" })}>
+      View instruments
+    </Link>
+  );
+}
 
 function RoleCard({ user }: { user: User }) {
   if (user.role === "BUSINESS") {
@@ -12,8 +50,9 @@ function RoleCard({ user }: { user: User }) {
           <CardTitle>{user.organization_name}</CardTitle>
           <CardDescription>Business dashboard</CardDescription>
         </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          Instruments, applications and certificates will appear here.
+        <CardContent className="grid gap-3">
+          <InstrumentCount />
+          <p className="text-sm text-muted-foreground">Applications and certificates will appear here.</p>
         </CardContent>
       </Card>
     );
@@ -27,8 +66,13 @@ function RoleCard({ user }: { user: User }) {
             Jurisdiction: {user.state_code} / {user.district_code}
           </CardDescription>
         </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          Your document reviews and inspections will appear here.
+        <CardContent className="grid gap-3">
+          <p className="text-sm text-muted-foreground">
+            Your document reviews and inspections will appear here.
+          </p>
+          <div>
+            <JurisdictionLink />
+          </div>
         </CardContent>
       </Card>
     );
@@ -43,8 +87,13 @@ function RoleCard({ user }: { user: User }) {
             {user.district_code ? ` / ${user.district_code}` : ""}
           </CardDescription>
         </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          Statistics, users and audit logs will appear here.
+        <CardContent className="grid gap-3">
+          <p className="text-sm text-muted-foreground">
+            Statistics, users and audit logs will appear here.
+          </p>
+          <div>
+            <JurisdictionLink />
+          </div>
         </CardContent>
       </Card>
     );

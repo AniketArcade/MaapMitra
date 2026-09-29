@@ -40,3 +40,43 @@ export type RegisterRequest = {
   phone?: string;
   password: string;
 };
+
+export type Page<T> = {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+// Types, units, accuracy classes and regions are plain strings: the backend owns the values
+// and serves them from GET /instruments/meta. Never hard-code them here.
+export type Instrument = {
+  id: string;
+  instrument_uid: string;
+  organization_id: string;
+  organization_name: string;
+  instrument_type: string;
+  manufacturer: string;
+  model: string;
+  serial_number: string;
+  capacity: number;
+  capacity_unit: string;
+  accuracy_class: string | null;
+  address: string;
+  state_code: string;
+  district_code: string;
+  latitude: number | null;
+  longitude: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InstrumentMeta = {
+  types: { value: string; label: string; units: string[] }[];
+  accuracy_classes: string[];
+  regions: {
+    state_code: string;
+    state_name: string;
+    districts: { code: string; name: string }[];
+  }[];
+};
