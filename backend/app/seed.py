@@ -10,14 +10,20 @@ import sys
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.application_types import ApplicationStatus, ApplicationType, DocumentType
 from app.core.config import get_settings
 from app.core.roles import OrgType, Role
 from app.core.security import hash_password
 from app.db.session import SessionLocal
+from app.models.application import Application
 from app.models.instrument import Instrument
 from app.models.organization import Organization
 from app.models.user import User
+from app.schemas.application import ApplicationCreate, StatusChange
 from app.schemas.instrument import InstrumentCreate
+from app.seed_files import demo_pdf, demo_png
+from app.services import applications as applications_service
+from app.services import documents as documents_service
 from app.services import instruments as instruments_service
 
 ORGS = [
@@ -117,9 +123,51 @@ def seed(db: Session, password: str) -> list[str]:
     )
     if owner is not None and exists is None:
         body = InstrumentCreate.model_validate(DEMO_INSTRUMENT)
-        instrument = instruments_service.create(db, owner, body, ip="seed")
-        created.append(f"instrument {instrument.serial_number} ({instrument.instrument_uid})")
+        exists = instruments_service.create(db, owner, body, ip="seed")
+        created.append(f"instrument {exists.serial_number} ({exists.instrument_uid})")
+
+    # A SUBMITTED application for OTH-0001, so the officer has a queue item on first login.
+    # ABC Traders' application is NOT seeded: the demo creates it live.
+    if owner is not None and exists is not None:
+        has_application = db.scalar(
+            select(Application.id).where(Application.instrument_id == exists.id).limit(1)
+        )
+        if has_application is None:
+            created.append(_seed_application(db, owner, exists))
     return created
+
+
+def _seed_application(db: Session, owner: User, instrument: Instrument) -> str:
+    application = applications_service.create(
+        db,
+        owner,
+        ApplicationCreate(
+            instrument_id=instrument.id, application_type=ApplicationType.VERIFICATION
+        ),
+        ip="seed",
+    )
+    files = (
+        (
+            DocumentType.PROOF_OF_OWNERSHIP,
+            "invoice-oth-0001.pdf",
+            demo_pdf("Demo invoice OTH-0001"),
+        ),
+        (DocumentType.INSTRUMENT_PHOTO, "nameplate-oth-0001.png", demo_png()),
+    )
+    for document_type, filename, data in files:
+        documents_service.upload(
+            db,
+            owner,
+            application_id=application.id,
+            document_type=document_type,
+            filename=filename,
+            data=data,
+            ip="seed",
+        )
+    applications_service.transition(
+        db, owner, application.id, StatusChange(status=ApplicationStatus.SUBMITTED), ip="seed"
+    )
+    return f"application {application.application_number} (SUBMITTED, 2 documents)"
 
 
 def main() -> int:
