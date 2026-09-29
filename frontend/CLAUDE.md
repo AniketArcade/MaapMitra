@@ -52,6 +52,7 @@ frontend/
 ## Rules
 
 - **All data comes from the FastAPI backend through `lib/api.ts`.** No direct Supabase or DB calls, and no `fetch` scattered in components.
+- **Never aggregate paged data on the client.** Counting or summing `items` from a large `page_size` fetch is wrong once there's more than one page. Use a server endpoint that returns the aggregate (e.g. `GET /applications/stats`) or the `total` field a list endpoint already returns.
 - **Never hard-code application statuses, application types or document types either:** use `getApplicationMeta()` (`GET /applications/meta`) and `labelFor()`.
 - Status-change buttons come only from `ApplicationDetail.allowed_actions`. Submit is also disabled until every required document is satisfied.
 - **Viewing a document:** call `window.open("", "_blank")` synchronously in the click handler, then set its location to the `?disposition=inline` URL; close it on failure (popup blockers). **Downloading:** fetch `?disposition=attachment` and `window.location.assign()` it.
@@ -77,7 +78,7 @@ frontend/
 
 | Route | Who | Notes |
 |---|---|---|
-| `/dashboard` | all logged in | Role-aware cards and counts |
+| `/dashboard` | all logged in | Role-aware cards. Business: 4 independent sections (instruments, applications total + status chips via `GET /applications/stats`, needs-attention DRAFTs, recent) — each with its own loading/error+retry/empty state (`lib/use-async.ts`) |
 | `/instruments` | Business, officials | List + search + paging; officials read-only (jurisdiction) |
 | `/instruments/new` | Business | Form: type → unit dropdown filtered by type; state → district |
 | `/instruments/[id]` | Business, officials | Detail; business gets Edit + Delete (confirm dialog). 404 = "Instrument not found" |

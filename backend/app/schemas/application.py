@@ -154,6 +154,16 @@ class ApplicationDetail(ApplicationOut):
         )
 
 
+class ApplicationStats(BaseModel):
+    total: int
+    by_status: dict[ApplicationStatus, int]
+
+    @classmethod
+    def from_counts(cls, counts: dict[ApplicationStatus, int]) -> Self:
+        by_status = {s: counts.get(s, 0) for s in ApplicationStatus}
+        return cls(total=sum(by_status.values()), by_status=by_status)
+
+
 class LabelledValue(BaseModel):
     value: str
     label: str

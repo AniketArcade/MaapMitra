@@ -12,6 +12,7 @@ from app.schemas.application import (
     ApplicationDetail,
     ApplicationMeta,
     ApplicationOut,
+    ApplicationStats,
     ApplicationUpdate,
     StatusChange,
 )
@@ -47,6 +48,12 @@ def create_application(
     request: Request, body: ApplicationCreate, user: Owner, db: DB
 ) -> ApplicationOut:
     return ApplicationOut.from_model(service.create(db, user, body, ip=get_client_ip(request)))
+
+
+# Declared before /{application_id} so "stats" is never parsed as an id.
+@router.get("/stats")
+def get_stats(user: Reader, db: DB) -> ApplicationStats:
+    return ApplicationStats.from_counts(service.stats(db, user))
 
 
 @router.get("")

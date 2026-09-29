@@ -103,6 +103,7 @@ Workflow for every schema change:
 - **Every request schema extends `StrictModel`** (`schemas/common.py`, `extra="forbid"`): unknown fields → 422.
 - **Every read of org-owned data goes through a `scope_*` helper** in `services/scoping.py` (`scope_instruments` today). Out of scope → 404 (`NotFound`), never 403. Scoping fails closed. Load the row with one scoped query; never load first and check ownership afterwards.
 - Lists return `Page[T]` (`{items, total, page, page_size}`) with `Annotated[PageParams, Depends()]` (page ≥1, page_size ≤100) and a stable order (`created_at desc, id`).
+- **Never let a client aggregate paged data itself** (counting `items` from a large `page_size` fetch is wrong past one page). Add a server-side stats/count endpoint that runs the same `scope_*` query grouped/counted in SQL — see `GET /applications/stats`.
 - Rules that need the stored row (e.g. PATCH merged-state checks) raise `Unprocessable(msg, field=...)`, which returns FastAPI's 422 list shape.
 - Enums, units and regions live in `core/instrument_types.py` and `core/regions.py`; application/document types in `core/application_types.py`. The frontend gets them from `GET /instruments/meta` and `GET /applications/meta`.
 - **Row locks re-read:** every `with_for_update()` re-check uses `.execution_options(populate_existing=True)`. Otherwise the identity map returns the stale pre-lock copy.
@@ -169,8 +170,9 @@ POST  /api/inspections           POST  /api/inspections/{id}/submit
 GET   /api/certificates/{id}     GET   /api/certificates/{id}/pdf
 POST  /api/jobs/expiry-check     # requires X-Cron-Secret header
 GET   /api/public/verify/{certificate_number}                     # no auth
-GET   /api/applications/meta       # types, statuses, document types + requirements, upload limits
+GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits
 CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
+GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 8 statuses zero-filled
 DELETE /api/documents/{id}         # BUSINESS, DRAFT only
 ```
 
