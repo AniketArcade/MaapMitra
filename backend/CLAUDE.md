@@ -24,18 +24,21 @@ python -m app.cli create-bucket         # private documents bucket (once per env
 ```text
 backend/
 ├── app/
-│   ├── main.py            # app factory, CORS, routers
-│   ├── core/              # config (pydantic-settings), security, deps
-│   ├── db/                # engine, session
+│   ├── main.py            # app factory, CORS, middleware, routers, error handlers
+│   ├── core/              # config, security, deps, roles, errors, rate limits, enums, regions
+│   ├── db/                # engine, session, base + mixins
+│   ├── middleware/        # body_limit.py (upload size, before multipart parsing)
 │   ├── models/            # SQLAlchemy models
-│   ├── schemas/           # Pydantic request/response models
-│   ├── services/          # business logic + status transitions
+│   ├── schemas/           # Pydantic request/response models (requests extend StrictModel)
+│   ├── services/          # business logic, scoping.py, status transitions, audit
 │   ├── routers/           # thin route handlers
-│   │   ├── auth.py  instruments.py  applications.py  documents.py
-│   │   ├── inspections.py  certificates.py  public.py  jobs.py
-│   ├── storage/           # Supabase Storage wrapper
-│   ├── pdf/               # ReportLab certificate + QR
-│   └── seed.py
+│   │   ├── health.py  auth.py  users.py  instruments.py  applications.py  documents.py
+│   │   └── (later) inspections.py  certificates.py  public.py  jobs.py
+│   ├── storage/           # Storage protocol: SupabaseStorage (REST) + MemoryStorage (tests)
+│   ├── pdf/               # (step 8) ReportLab certificate + QR
+│   ├── cli.py             # create-superadmin, create-bucket
+│   ├── seed.py            # demo data (python -m app.seed --password ...)
+│   └── seed_files.py      # tiny generated demo PDF/PNG
 ├── alembic/
 ├── tests/
 ├── requirements.txt

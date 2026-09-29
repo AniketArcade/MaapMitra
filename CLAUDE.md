@@ -59,7 +59,7 @@ PostGIS · Leaflet maps · pgvector/RAG · OCR · Celery/Redis · native mobile 
 
 ## MVP build order
 
-1. Login + RBAC ✅ (`feat/auth-rbac`, spec `docs/specs/01-login-rbac.md`)
+1. Login + RBAC ✅ (spec `docs/specs/01-login-rbac.md`)
 2. Instrument registration ✅ (spec `docs/specs/02-instruments.md`)
 3. Application + document upload ✅ (spec `docs/specs/03-applications.md`)
 4. Business dashboard
