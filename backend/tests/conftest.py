@@ -10,6 +10,7 @@ os.environ["JWT_SECRET"] = "test-secret-test-secret-test-secret-00"
 os.environ["CRON_SECRET"] = "test-cron-secret"
 os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 os.environ["TRUSTED_PROXY_HOPS"] = "0"
+os.environ["STORAGE_BACKEND"] = "memory"
 
 import uuid  # noqa: E402
 from collections.abc import Callable, Iterator  # noqa: E402

@@ -3,10 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 
+from app.core.application_types import MAX_UPLOAD_REQUEST_BYTES
 from app.core.config import get_settings
 from app.core.cookies import clear_auth_cookies
 from app.core.errors import DomainError, Unprocessable
 from app.core.rate_limit import limiter
+from app.middleware.body_limit import BodySizeLimitMiddleware
 from app.routers import auth, health, instruments, users
 
 
@@ -42,6 +44,14 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+
+    # Outermost: rejects oversized uploads before multipart parsing starts.
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        path="/api/documents",
+        method="POST",
+        max_bytes=MAX_UPLOAD_REQUEST_BYTES,
     )
 
     for router in (health.router, auth.router, users.router, instruments.router):

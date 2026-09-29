@@ -35,5 +35,13 @@ class Unprocessable(DomainError):
         self.field = field
 
 
+class PayloadTooLarge(DomainError):
+    status_code = 413
+
+
+class BadGateway(DomainError):
+    status_code = 502
+
+
 class RateLimited(DomainError):
     status_code = 429
