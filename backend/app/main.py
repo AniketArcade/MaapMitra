@@ -1,14 +1,37 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 from app.core.config import get_settings
-from app.routers import health
+from app.core.cookies import clear_auth_cookies
+from app.core.errors import DomainError
+from app.core.rate_limit import limiter
+from app.routers import auth, health, users
+
+
+async def domain_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, DomainError)
+    headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
+    response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=headers)
+    if exc.clear_cookies:
+        clear_auth_cookies(response)
+    return response
+
+
+async def rate_limit_handler(_: Request, __: Exception) -> JSONResponse:
+    return JSONResponse({"detail": "Too many requests. Try again later."}, status_code=429)
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="Legal Metrology API", version=settings.APP_VERSION)
 
+    app.state.limiter = limiter
+    app.add_exception_handler(DomainError, domain_error_handler)
+    app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
+
+    # Browser traffic arrives same-origin via the Next.js rewrite; CORS covers direct calls.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -17,7 +40,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(health.router, prefix="/api")
+    for router in (health.router, auth.router, users.router):
+        app.include_router(router, prefix="/api")
     return app
 
 
