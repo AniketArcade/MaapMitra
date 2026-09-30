@@ -18,6 +18,7 @@ const BADGE: Record<string, { label: string; className: string }> = {
   VALID: { label: "✓ VALID", className: "bg-green-100 text-green-800" },
   EXPIRED: { label: "⚠ EXPIRED", className: "bg-amber-100 text-amber-800" },
   REVOKED: { label: "✕ REVOKED", className: "bg-red-100 text-red-800" },
+  SUPERSEDED: { label: "⚠ SUPERSEDED", className: "bg-amber-100 text-amber-800" },
 };
 
 export default function VerifyPage() {
@@ -59,6 +60,10 @@ export default function VerifyPage() {
             <dd>{result.instrument_type_label}</dd>
           </div>
           <div className="flex justify-between gap-2">
+            <dt className="text-muted-foreground">Instrument ID</dt>
+            <dd>{result.instrument_uid}</dd>
+          </div>
+          <div className="flex justify-between gap-2">
             <dt className="text-muted-foreground">Manufacturer</dt>
             <dd>{result.manufacturer}</dd>
           </div>
@@ -76,6 +81,10 @@ export default function VerifyPage() {
               {new Date(result.valid_from).toLocaleDateString()} –{" "}
               {new Date(result.valid_until).toLocaleDateString()}
             </dd>
+          </div>
+          <div className="flex justify-between gap-2">
+            <dt className="text-muted-foreground">Issued by</dt>
+            <dd>{result.issued_by}</dd>
           </div>
         </dl>
       </CardContent>

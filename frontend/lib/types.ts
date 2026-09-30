@@ -229,11 +229,18 @@ export type VerifyResult = {
   certificate_number: string;
   status: string;
   instrument_type_label: string;
+  // Spec 13: the instrument's own permanent public identifier — not owner PII, not an internal
+  // database id (already printed on the certificate PDF anyone with the certificate number can
+  // reach). Added to PublicVerifyOut alongside issued_by below; never add anything else here
+  // without checking docs/specs/13-certificate-superseding.md §5 D4 first.
+  instrument_uid: string;
   manufacturer: string;
   model: string;
   serial_number: string;
   valid_from: string;
   valid_until: string;
+  // Spec 13: display label for the approving officer (Certificate.snapshot.approved_by_name).
+  issued_by: string;
 };
 
 export type AdminCertificateStats = {
