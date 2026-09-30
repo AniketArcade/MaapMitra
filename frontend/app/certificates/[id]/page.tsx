@@ -92,7 +92,7 @@ export default function CertificateDetailPage() {
       ) : null}
 
       {certificate.is_expiring_soon ? (
-        <p className="text-sm font-medium text-amber-600 dark:text-amber-500">
+        <p className="text-sm font-medium text-warning">
           Expiring soon — a re-verification may be needed shortly.
         </p>
       ) : null}

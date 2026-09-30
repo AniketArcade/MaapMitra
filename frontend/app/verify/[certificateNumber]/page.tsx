@@ -15,10 +15,10 @@ type State =
   | { kind: "ready"; result: VerifyResult };
 
 const BADGE: Record<string, { label: string; className: string }> = {
-  VALID: { label: "✓ VALID", className: "bg-green-100 text-green-800" },
-  EXPIRED: { label: "⚠ EXPIRED", className: "bg-amber-100 text-amber-800" },
-  REVOKED: { label: "✕ REVOKED", className: "bg-red-100 text-red-800" },
-  SUPERSEDED: { label: "⚠ SUPERSEDED", className: "bg-amber-100 text-amber-800" },
+  VALID: { label: "✓ VALID", className: "bg-success/15 text-success dark:bg-success/25" },
+  EXPIRED: { label: "⚠ EXPIRED", className: "bg-warning/20 text-warning-foreground dark:bg-warning/25" },
+  REVOKED: { label: "✕ REVOKED", className: "bg-destructive/10 text-destructive dark:bg-destructive/20" },
+  SUPERSEDED: { label: "⚠ SUPERSEDED", className: "bg-warning/20 text-warning-foreground dark:bg-warning/25" },
 };
 
 export default function VerifyPage() {

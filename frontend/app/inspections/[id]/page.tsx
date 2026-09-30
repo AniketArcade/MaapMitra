@@ -118,7 +118,7 @@ function ChecklistResultToggle({
               !selected && "border-border bg-background text-muted-foreground hover:bg-muted",
               selected &&
                 result === "PASS" &&
-                "border-green-600 bg-green-50 text-green-700 dark:border-green-500 dark:bg-green-950 dark:text-green-400",
+                "border-success bg-success/10 text-success",
               selected && result === "FAIL" && "border-destructive bg-destructive/10 text-destructive",
               selected && result === "NA" && "border-foreground/40 bg-muted text-foreground",
             )}
@@ -365,7 +365,7 @@ export default function InspectionPage() {
                 className={cn(
                   "min-h-9 rounded-full border px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                   isCurrent && "border-primary bg-primary text-primary-foreground",
-                  !isCurrent && isDone && "border-green-600/40 bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-400",
+                  !isCurrent && isDone && "border-success/40 bg-success/10 text-success",
                   !isCurrent && !isDone && "border-border bg-background text-muted-foreground",
                 )}
               >
