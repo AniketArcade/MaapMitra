@@ -25,6 +25,7 @@ import { ApiError, api, getGatcEligible, getGatcOrgUsers, uploadDocument } from 
 import { useAuth } from "@/lib/auth";
 import { getApplicationMeta, labelFor } from "@/lib/meta";
 import { addDaysToIsoDate, todayInTimezone } from "@/lib/scheduling";
+import { assigneeRoleLabel } from "@/lib/utils";
 import type {
   ApplicationDetail,
   ApplicationMeta,
@@ -57,13 +58,6 @@ function errorMessage(err: unknown): string {
   if (!(err instanceof ApiError)) return "Could not reach the server.";
   const fieldMessage = Object.values(err.fieldErrors)[0];
   return fieldMessage ?? err.message;
-}
-
-// Spec 15: InspectionAssigneeRole is a small, self-evident, model-owned enum with no meta-exposed
-// label dict (same precedent ChecklistResult already sets) — display labels are fine to compute
-// inline here, unlike status/application_type/document_type, which always go through meta.
-function assigneeRoleLabel(role: string): string {
-  return role === "GATC" ? "GATC (test centre)" : "LM Officer";
 }
 
 export default function ApplicationDetailPage() {
