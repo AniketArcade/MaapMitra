@@ -25,7 +25,10 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str | None = None  # backend only, never logged or returned
     SUPABASE_BUCKET: str = "documents"
 
-    RESEND_API_KEY: str | None = None  # optional until email lands
+    # Email (step 10). "memory" is for tests/local dev.
+    EMAIL_BACKEND: Literal["resend", "memory"] = "resend"
+    RESEND_API_KEY: str | None = None
+    RESEND_FROM_EMAIL: str | None = None
 
     PUBLIC_BASE_URL: str = "http://localhost:3000"
     CORS_ORIGINS: str = "http://localhost:3000"
@@ -38,6 +41,13 @@ class Settings(BaseSettings):
     # Scheduling (step 5). ASSUMPTION: deployment serves India; change if not.
     APP_TIMEZONE: str = "Asia/Kolkata"
     SCHEDULING_MAX_DAYS_AHEAD: int = Field(default=180, ge=1)
+
+    # Certificates (step 8). ASSUMPTION: not a real Legal Metrology validity rule.
+    CERTIFICATE_VALIDITY_YEARS: int = Field(default=2, ge=1)
+
+    # Expiry reminders (step 10). ASSUMPTION: not a real Legal Metrology rule.
+    EXPIRY_REMINDER_30D_DAYS: int = Field(default=30, ge=1)
+    EXPIRY_REMINDER_7D_DAYS: int = Field(default=7, ge=1)
 
     @field_validator("SUPABASE_URL")
     @classmethod
@@ -63,6 +73,17 @@ class Settings(BaseSettings):
             )
         if not self.SUPABASE_BUCKET:
             raise ValueError("SUPABASE_BUCKET must be set")
+        return self
+
+    @model_validator(mode="after")
+    def check_email(self) -> Self:
+        if self.EMAIL_BACKEND != "resend":
+            return self
+        key, sender = self.RESEND_API_KEY or "", self.RESEND_FROM_EMAIL or ""
+        if len(key) < 10 or key.startswith("#"):
+            raise ValueError("RESEND_API_KEY must be set (Resend > API Keys)")
+        if "@" not in sender:
+            raise ValueError("RESEND_FROM_EMAIL must be set to a valid sender address")
         return self
 
     @property

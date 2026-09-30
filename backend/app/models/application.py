@@ -61,6 +61,9 @@ class Application(UUIDPk, Timestamps, Base):
     inspection: Mapped["Inspection | None"] = relationship(  # noqa: F821
         lazy="raise", uselist=False, passive_deletes=True
     )
+    certificate: Mapped["Certificate | None"] = relationship(  # noqa: F821
+        lazy="raise", uselist=False, passive_deletes=True
+    )
 
     __table_args__ = (
         # One active (non-terminal) application per instrument. Race-free.

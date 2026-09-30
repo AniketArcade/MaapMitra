@@ -66,9 +66,9 @@ PostGIS · Leaflet maps · pgvector/RAG · OCR · Celery/Redis · native mobile 
 5. Officer dashboard ✅ (spec `docs/specs/05-officer-dashboard.md`)
 6. Inspection checklist + measurements ✅ (spec `docs/specs/06-inspection-checklist.md`)
 7. Approve/reject workflow ✅ (spec `docs/specs/07-approve-reject.md`)
-8. Certificate PDF + QR
-9. Public QR verify page
-10. Expiry dashboard + daily job
+8. Certificate PDF + QR ✅ (spec `docs/specs/08-certificate-pdf-qr.md`)
+9. Public QR verify page ✅ (spec `docs/specs/09-public-verify.md`)
+10. Expiry dashboard + daily job ✅ (spec `docs/specs/10-expiry-job.md`)
 
 Finish the full flow end to end before any Good-to-Have (email polish, GPS, charts, GATC, OCR).
 

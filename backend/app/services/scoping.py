@@ -11,6 +11,7 @@ from sqlalchemy import Select, false
 from app.core.application_types import ApplicationStatus
 from app.core.roles import Role
 from app.models.application import Application
+from app.models.certificate import Certificate
 from app.models.document import Document
 from app.models.inspection import Inspection
 from app.models.instrument import Instrument
@@ -75,4 +76,11 @@ def scope_inspections(stmt: Select[Any], user: User) -> Select[Any]:
     """An inspection is only ever reached through its application's scope (step 6)."""
     return scope_applications(
         stmt.join(Application, Inspection.application_id == Application.id), user
+    )
+
+
+def scope_certificates(stmt: Select[Any], user: User) -> Select[Any]:
+    """A certificate is only ever reached through its application's scope (step 8)."""
+    return scope_applications(
+        stmt.join(Application, Certificate.application_id == Application.id), user
     )

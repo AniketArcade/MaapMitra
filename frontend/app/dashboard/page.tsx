@@ -391,9 +391,11 @@ function RoleCard({ user }: { user: User }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
-          <p className="text-sm text-muted-foreground">
-            Statistics, users and audit logs will appear here.
-          </p>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/admin" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              Expiry dashboard
+            </Link>
+          </div>
           <div>
             <JurisdictionLink />
           </div>

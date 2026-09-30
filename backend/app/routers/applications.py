@@ -19,6 +19,7 @@ from app.schemas.application import (
 )
 from app.schemas.common import Page, PageParams
 from app.services import applications as service
+from app.services import certificates as certificates_service
 from app.services import inspections as inspections_service
 
 router = APIRouter(prefix="/applications", tags=["applications"])
@@ -127,4 +128,12 @@ def reschedule_inspection(
     db: DB,
 ) -> ApplicationDetail:
     service.reschedule(db, user, application_id, body, ip=get_client_ip(request))
+    return _detail(db, user, application_id)
+
+
+@router.post("/{application_id}/certificate")
+def issue_certificate(
+    request: Request, application_id: uuid.UUID, user: Officer, db: DB
+) -> ApplicationDetail:
+    certificates_service.issue(db, user, application_id, ip=get_client_ip(request))
     return _detail(db, user, application_id)

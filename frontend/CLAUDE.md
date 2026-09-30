@@ -36,7 +36,7 @@ frontend/
 │   ├── applications/          # list, new, [id]
 │   ├── inspections/           # officer: list, [id] (field flow)
 │   ├── certificates/          # list, [id]
-│   ├── admin/                 # stats, users, audit
+│   ├── admin/                 # certificate expiry counts + expiring-soon list (step 10)
 │   └── verify/[certificateNumber]/   # PUBLIC, no auth
 ├── components/
 │   ├── ui/                    # shadcn (generated, don't hand-edit)
@@ -54,7 +54,7 @@ frontend/
 - **All data comes from the FastAPI backend through `lib/api.ts`.** No direct Supabase or DB calls, and no `fetch` scattered in components.
 - **Never aggregate paged data on the client.** Counting or summing `items` from a large `page_size` fetch is wrong once there's more than one page. Use a server endpoint that returns the aggregate (e.g. `GET /applications/stats`) or the `total` field a list endpoint already returns.
 - **Never hard-code application statuses, application types or document types either:** use `getApplicationMeta()` (`GET /applications/meta`) and `labelFor()`.
-- Status-change buttons come only from `ApplicationDetail.allowed_actions`. Submit is also disabled until every required document is satisfied.
+- Status-change buttons come only from `ApplicationDetail.allowed_actions`. Submit is also disabled until every required document is satisfied. **One documented exception:** Issue certificate (step 8) — `APPROVED -> CERTIFICATE_ISSUED` is `Edge(frozenset(), enabled=False)` in the backend (system-only, bypasses `transition()` entirely via `POST /applications/{id}/certificate`), so the button is gated on `app.status === "APPROVED" && isOfficer` instead.
 - **Viewing a document:** call `window.open("", "_blank")` synchronously in the click handler, then set its location to the `?disposition=inline` URL; close it on failure (popup blockers). **Downloading:** fetch `?disposition=attachment` and `window.location.assign()` it.
 - `lib/api.ts` never sets `Content-Type` for `FormData` bodies.
 - **Never hard-code instrument types, units, accuracy classes or regions.** Load them with `getInstrumentMeta()` (`lib/meta.ts`, cached `GET /instruments/meta`). Show names, send codes.
@@ -88,11 +88,11 @@ frontend/
 | `/instruments/[id]/edit` | Business | Same form; type is read-only; fields in `locked_fields` disabled; PATCH sends only changed fields |
 | `/applications` | Business, officials | List + status filter (URL-driven `?status=`) + search + `sort`; officials never see drafts |
 | `/applications/new?instrument_id=` | Business | Instrument without an active application → type → notes → Create draft |
-| `/applications/[id]` | Business, officials | Requirements checklist, per-type upload (draft), View/Remove, Submit / Start review / Reject / **Schedule inspection** (dialog, date input) timeline; while SCHEDULED, officer gets **Change date** (no dialog); assigned officer gets **Start inspection** (no dialog, direct transition + navigate) once SCHEDULED, then **Continue inspection** (link to `/inspections/[id]`) while INSPECTION; once the inspection is submitted, any in-scope officer sees the checklist's PASS/FAIL/NA summary and **Approve** / **Reject** (step 7, optional-note / required-note dialogs), and the inspection link relabels to **View inspection** |
+| `/applications/[id]` | Business, officials | Requirements checklist, per-type upload (draft), View/Remove, Submit / Start review / Reject / **Schedule inspection** (dialog, date input) timeline; while SCHEDULED, officer gets **Change date** (no dialog); assigned officer gets **Start inspection** (no dialog, direct transition + navigate) once SCHEDULED, then **Continue inspection** (link to `/inspections/[id]`) while INSPECTION; once the inspection is submitted, any in-scope officer sees the checklist's PASS/FAIL/NA summary and **Approve** / **Reject** (step 7, optional-note / required-note dialogs), and the inspection link relabels to **View inspection**; once `APPROVED`, an officer sees **Issue certificate** (step 8, no dialog); once `CERTIFICATE_ISSUED`, a summary (number, validity) and a **View certificate** link to `/certificates/[id]` |
 | `/inspections/[id]` | Officer | **Mobile-first** field flow (below); read-only (`can_edit: false`) for a non-assigned officer or once submitted |
-| `/certificates/[id]` | Business | Download PDF, show QR |
-| `/admin` | Admin | Counts, expiring soon, audit log |
-| `/verify/[certificateNumber]` | Public | Big status badge: ✓ VALID / ⚠ EXPIRED / ✕ REVOKED |
+| `/certificates/[id]` | Business, officials, admins | Certificate details, QR (from `qr_code_data_uri`), **View PDF** / **Download** (signed URL, same pattern as documents) |
+| `/admin` | `ADMIN_ROLES` (`SUPER_ADMIN`/`STATE_ADMIN`/`DISTRICT_ADMIN`) | Four count cards (valid/expiring soon/expired/revoked, `AdminCertificateStats`) + an expiring-soon table (`GET /admin/certificates/expiring-soon`), jurisdiction-scoped. Linked from the dashboard's admin card. Deliberately just the expiry slice, not a full user-management or audit-log-browsing UI — neither is built anywhere (step 10, spec `docs/specs/10-expiry-job.md` §10 D1). |
+| `/verify/[certificateNumber]` | Public | No `AppShell`, own `layout.tsx` (centered card, same shape as `(auth)/layout.tsx`). Big status badge: ✓ VALID (green) / ⚠ EXPIRED (amber) / ✕ REVOKED (red), `instrument_type_label` + manufacturer/model/serial, `valid_from`–`valid_until`. Never links to the PDF or anywhere else in the app (step 9). |
 
 ## Officer field inspection (mobile-first)
 
