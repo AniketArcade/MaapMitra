@@ -1,0 +1,15 @@
+name: Certificate expiry check
+
+on:
+  schedule:
+    - cron: "30 21 * * *"   # 03:00 IST
+  workflow_dispatch: {}       # allows manual trigger from the Actions tab
+
+jobs:
+  expiry-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call expiry-check endpoint
+        run: |
+          curl -f -X POST -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            https://maapmitra.onrender.com/api/jobs/expiry-check
