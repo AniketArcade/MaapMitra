@@ -1,5 +1,5 @@
 // Single typed API client. Client-side only: it calls the same-origin /api/* rewrite.
-import type { ApplicationStats, AuthResponse } from "@/lib/types";
+import type { ApplicationStats, AuthResponse, InspectionDetail } from "@/lib/types";
 
 type ValidationIssue = { loc: (string | number)[]; msg: string };
 
@@ -121,4 +121,25 @@ export function uploadDocument<T>(form: FormData): Promise<T> {
 // on retry and on tab focus, so a stale cached promise would defeat both.
 export function getApplicationStats(): Promise<ApplicationStats> {
   return api<ApplicationStats>("/applications/stats");
+}
+
+export function getInspection(id: string): Promise<InspectionDetail> {
+  return api<InspectionDetail>(`/inspections/${id}`);
+}
+
+export type InspectionUpdate = {
+  checklist_items?: { item_key: string; result?: string | null; remarks?: string | null }[];
+  measurements?: { label: string; observed_value?: string | null }[];
+  overall_remarks?: string | null;
+};
+
+export function patchInspection(id: string, body: InspectionUpdate): Promise<InspectionDetail> {
+  return api<InspectionDetail>(`/inspections/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function submitInspection(id: string): Promise<InspectionDetail> {
+  return api<InspectionDetail>(`/inspections/${id}/submit`, { method: "POST" });
 }

@@ -23,12 +23,16 @@ Reader = Annotated[
     ),
 ]
 Owner = Annotated[User, Depends(require_roles(Role.BUSINESS))]
+# BUSINESS uploads/deletes its own documents (DRAFT only); LM_OFFICER uploads/deletes inspection
+# evidence photos (INSPECTION only, assigned officer only) — the service enforces which actor
+# may touch which document_type (spec 06 A1); this dependency only admits both roles.
+Uploader = Annotated[User, Depends(require_roles(Role.BUSINESS, Role.LM_OFFICER))]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def upload_document(
     request: Request,
-    user: Owner,
+    user: Uploader,
     db: DB,
     application_id: Annotated[uuid.UUID, Form()],
     document_type: Annotated[DocumentType, Form()],
@@ -64,5 +68,5 @@ def document_url(
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_document(request: Request, document_id: uuid.UUID, user: Owner, db: DB) -> None:
+def delete_document(request: Request, document_id: uuid.UUID, user: Uploader, db: DB) -> None:
     service.delete(db, user, document_id, ip=get_client_ip(request))

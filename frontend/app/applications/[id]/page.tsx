@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 
 import { StatusBadge } from "@/components/applications/status-badge";
@@ -48,6 +48,7 @@ function errorMessage(err: unknown): string {
 
 export default function ApplicationDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { user } = useAuth();
   const [meta, setMeta] = useState<ApplicationMeta | null>(null);
   const [state, setState] = useState<State>({ kind: "loading" });
@@ -58,6 +59,8 @@ export default function ApplicationDetailPage() {
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState("");
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [approveNote, setApproveNote] = useState("");
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleDate, setScheduleDate] = useState("");
   const [rescheduleDate, setRescheduleDate] = useState("");
@@ -99,9 +102,11 @@ export default function ApplicationDetailPage() {
 
   const app = state.app;
   const isOwner = user?.role === "BUSINESS";
+  const isOfficer = user?.role === "LM_OFFICER";
   const editable = isOwner && app.status === "DRAFT";
   const canSubmit = app.allowed_actions.includes("SUBMITTED");
   const canSchedule = app.allowed_actions.includes("SCHEDULED");
+  const canStartInspection = app.allowed_actions.includes("INSPECTION");
   const requirementsMet = app.requirements.every((r) => !r.required || r.satisfied);
   const limits = meta?.limits;
   const atLimit = limits ? app.documents.length >= limits.max_documents : false;
@@ -197,7 +202,26 @@ export default function ApplicationDetailPage() {
       setConfirmSubmit(false);
       setRejectOpen(false);
       setRejectNote("");
+      setApproveOpen(false);
+      setApproveNote("");
       setScheduleOpen(false);
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startInspection() {
+    setBusy(true);
+    setActionError(null);
+    try {
+      const updated = await api<ApplicationDetail>(`/applications/${app.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "INSPECTION" }),
+      });
+      // No dialog: unlike Schedule, there is nothing to confirm, just enter the field flow.
+      if (updated.inspection) router.push(`/inspections/${updated.inspection.id}`);
     } catch (err) {
       setActionError(errorMessage(err));
     } finally {
@@ -265,6 +289,11 @@ export default function ApplicationDetailPage() {
               {busy ? "Starting…" : "Start review"}
             </Button>
           ) : null}
+          {app.allowed_actions.includes("APPROVED") ? (
+            <Button onClick={() => setApproveOpen(true)} disabled={busy}>
+              Approve
+            </Button>
+          ) : null}
           {app.allowed_actions.includes("REJECTED") ? (
             <Button variant="destructive" onClick={() => setRejectOpen(true)} disabled={busy}>
               Reject
@@ -273,6 +302,11 @@ export default function ApplicationDetailPage() {
           {canSchedule ? (
             <Button onClick={() => setScheduleOpen(true)} disabled={busy}>
               Schedule inspection
+            </Button>
+          ) : null}
+          {canStartInspection ? (
+            <Button onClick={() => void startInspection()} disabled={busy}>
+              {busy ? "Starting…" : "Start inspection"}
             </Button>
           ) : null}
         </div>
@@ -289,6 +323,23 @@ export default function ApplicationDetailPage() {
           <p className="text-sm text-muted-foreground">
             Assigned to {app.inspection.assigned_officer_name}
           </p>
+          {app.inspection.submitted_at && app.inspection.checklist_summary ? (
+            <p className="text-sm text-muted-foreground">
+              Checklist: {app.inspection.checklist_summary.passed} passed,{" "}
+              {app.inspection.checklist_summary.failed} failed, {app.inspection.checklist_summary.na}{" "}
+              n/a
+            </p>
+          ) : null}
+          {app.status === "INSPECTION" && isOfficer ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              onClick={() => router.push(`/inspections/${app.inspection!.id}`)}
+            >
+              {app.inspection.submitted_at ? "View inspection" : "Continue inspection"}
+            </Button>
+          ) : null}
           {app.can_reschedule ? (
             <div className="flex flex-wrap items-end gap-2">
               <div className="grid gap-1.5">
@@ -459,6 +510,39 @@ export default function ApplicationDetailPage() {
               disabled={busy || rejectNote.trim().length < REJECT_MIN}
             >
               {busy ? "Rejecting…" : "Reject"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve this application?</DialogTitle>
+            <DialogDescription>
+              The instrument stays location-locked until the certificate is issued.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor="approve_note">Note (optional)</Label>
+            <Textarea
+              id="approve_note"
+              value={approveNote}
+              maxLength={1000}
+              onChange={(e) => setApproveNote(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() =>
+                void changeStatus("APPROVED", approveNote.trim() ? { note: approveNote.trim() } : {})
+              }
+              disabled={busy}
+            >
+              {busy ? "Approving…" : "Approve"}
             </Button>
           </DialogFooter>
         </DialogContent>

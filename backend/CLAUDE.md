@@ -33,7 +33,8 @@ backend/
 │   ├── services/          # business logic, scoping.py, status transitions, audit
 │   ├── routers/           # thin route handlers
 │   │   ├── health.py  auth.py  users.py  instruments.py  applications.py  documents.py
-│   │   └── (later) inspections.py  certificates.py  public.py  jobs.py
+│   │   ├── inspections.py  # checklist/measurements (step 6)
+│   │   └── (later) certificates.py  public.py  jobs.py
 │   ├── storage/           # Storage protocol: SupabaseStorage (REST) + MemoryStorage (tests)
 │   ├── pdf/               # (step 8) ReportLab certificate + QR
 │   ├── cli.py             # create-superadmin, create-bucket
@@ -94,6 +95,7 @@ Workflow for every schema change:
 | `0002` | instruments (+ `instrument_uid_seq`, 3 enums, functional unique index) | 2026-09-30 (seed: `OTH-0001`) |
 | `0003` | applications, application_status_history, documents (+ `application_number_seq`, 3 enums, partial unique index) | 2026-09-30 (bucket `documents` created; seed: `APP-2026-000001` for `OTH-0001`) |
 | `0004` | inspections (+ `ix_inspections_officer_date`) | 2026-09-30 (no seed changes; scheduling is driven live in the demo) |
+| `0005` | inspection checklist (`inspection_checklist_items`, `inspection_measurements`, 3 new `inspections` columns, `checklist_result` enum, `document_type` gains `INSPECTION_EVIDENCE`) | 2026-09-30 (no seed changes; the field-inspection flow is driven live in the demo) |
 
 ## Layering rules
 
@@ -115,7 +117,7 @@ Workflow for every schema change:
 ## Data model
 
 Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications`, `documents`, `inspections`,
-`inspection_checklist`, `certificates`, `payments` (mocked), `audit_logs`
+`inspection_checklist_items`, `inspection_measurements`, `certificates`, `payments` (mocked), `audit_logs`
 
 - `users`: DB check constraints tie `role` to `organization_id` (BUSINESS/GATC need one, officials must not) and require `state_code`/`district_code` for officials.
 - `refresh_tokens`: SHA-256 `token_hash` only, never the raw token.
@@ -134,7 +136,8 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
   - **Officials never see DRAFT applications or their documents** (`scope_applications`).
   - `scheduled_date` on `ApplicationOut`/`ApplicationDetail.inspection` comes from a LEFT JOIN/`contains_eager` on `inspections`, never a per-row query.
 - `documents`: `storage_path` = `applications/{application_id}/{document_id}.{pdf|jpg|png}` (never a URL, never the user's filename). `content_type` is the **sniffed** type. Max 10 per application.
-- `inspections` (spec `docs/specs/05-officer-dashboard.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign only in step 5: always the officer who scheduled it; reassignment is a service-layer change later, not a migration). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` is reserved for step 6's "my inspections" list.
+- `inspections` (spec `docs/specs/05-officer-dashboard.md`, extended by `docs/specs/06-inspection-checklist.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign only in step 5: always the officer who scheduled it; also the only officer who may start/edit/submit the field inspection, step 6 D1). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` doubles as the "my inspections" list: `GET /applications?status=INSPECTION&sort=scheduled_asc`. Step 6 adds `overall_remarks` (text, null), `submitted_at` (timestamptz, null — the single source of truth for "this checklist is locked"), `submitted_by` (FK → users, `ON DELETE RESTRICT`, null).
+- `inspection_checklist_items` / `inspection_measurements` (spec `docs/specs/06-inspection-checklist.md`): one row per `CHECKLIST_TEMPLATES`/`MEASUREMENT_TEMPLATES` entry for the instrument's type (`core/inspection_templates.py`, ASSUMPTION — illustrative demo content), **snapshotted** when the inspection starts (`SCHEDULED → INSPECTION`) so a later template edit never changes an in-progress or already-submitted inspection. `inspection_checklist_items.result` is a nullable `checklist_result` enum (`PASS`/`FAIL`/`NA`); `inspection_measurements.expected_value` is `instrument.capacity * fraction` computed at start time, `observed_value` filled by the officer. Both `ON DELETE CASCADE` from `inspections`, unique on `(inspection_id, item_key)` / `(inspection_id, label)`.
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
   - instrument `instrument_uid`: `LM-JH-DHN-000123`
@@ -153,6 +156,8 @@ DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
 - Enforce it through an `ALLOWED_TRANSITIONS` map in `services/applications.py`: `(from, to) → Edge(roles, enabled)`. Later steps flip `enabled`.
 - Enabled in step 3: DRAFT → SUBMITTED (BUSINESS, all required documents present), SUBMITTED → DOCUMENT_REVIEW (LM_OFFICER), DOCUMENT_REVIEW → REJECTED (LM_OFFICER, `note` 10–1000 chars).
 - Enabled in step 5: DOCUMENT_REVIEW → SCHEDULED (LM_OFFICER, requires `scheduled_date`; §"Scheduling" below).
+- Enabled in step 6: SCHEDULED → INSPECTION (LM_OFFICER, **and only the assigned officer** — `Edge(roles, enabled)` alone can't express that identity check, so `transition()` adds it explicitly; §"Field inspection" below).
+- Enabled in step 7: INSPECTION → APPROVED / REJECTED (any in-scope LM_OFFICER, **not** assigned-officer-locked — unlike the checklist itself, deliberately, since it's frozen by then; gated on `inspections.submitted_at` being set; §"Approve/Reject" below).
 - `PATCH /applications/{id}/status` evaluation order: out of scope → 404; not an edge → 409 `Invalid status change`; wrong role → 403; not enabled → 409 `This action is not available yet`; edge rules → 409/422; apply (row lock, history row, audit row, one transaction).
 - `ApplicationDetail.allowed_actions` lists the enabled edges the caller's role may take (requirements not considered).
 - The status PATCH endpoint validates against that map and the caller's role. It never sets an arbitrary status.
@@ -169,6 +174,35 @@ Certificate status: `VALID` · `EXPIRED` · `REVOKED`
 - Audit actions: `INSPECTION_SCHEDULED`, `INSPECTION_RESCHEDULED`.
 - `GET /applications` accepts `sort: "created_desc" | "scheduled_asc"` (422 on anything else); `scheduled_asc` needs an explicit `.outerjoin(Application.inspection)` + `contains_eager`, not `joinedload`, since ordering requires referencing that join directly.
 
+### Field inspection (step 6, spec `docs/specs/06-inspection-checklist.md`)
+- Starting (`SCHEDULED → INSPECTION`), editing (`PATCH /inspections/{id}`), evidence upload/delete and submitting are all gated to `inspections.assigned_officer_id == caller` — a stricter check than role/scope, since `scope_applications` already lets any in-jurisdiction officer read a non-DRAFT application. A non-assigned in-scope officer gets 403 `"Only the assigned officer can do this"`.
+- Starting bulk-inserts one `inspection_checklist_items` row per `CHECKLIST_TEMPLATES[instrument.instrument_type]` entry and one `inspection_measurements` row per `MEASUREMENT_TEMPLATES[instrument.instrument_type]` fraction (`core/inspection_templates.py`), reading the instrument's `capacity`/`capacity_unit` under the same "application, then instrument" lock order as scheduling — a bare `SELECT ... FOR UPDATE`, never `instruments_service.get()`.
+- `PATCH /inspections/{id}` applies only the checklist items/measurements named in the request body (partial saves); an `item_key`/`label` that doesn't match an existing row → 422. Locked (409) once `submitted_at` is set.
+- `POST /inspections/{id}/submit`: 422 if any checklist item's `result` or measurement's `observed_value` is still null. Sets `submitted_at`/`submitted_by`; **does not** change `application.status` — it stays `INSPECTION` until step 7's Approve/Reject.
+- Evidence photos reuse the `documents` upload/delete pipeline with `document_type=INSPECTION_EVIDENCE`, under different rules than a business document (`services/documents.py: _check_upload_allowed`): actor must be the assigned officer, application status must be `INSPECTION`, not yet submitted. Counted against a separate `MAX_EVIDENCE_PHOTOS` cap (`_count(..., evidence=True)`), independent of `MAX_DOCUMENTS`. `routers/documents.py`'s upload/delete dependency now admits `LM_OFFICER` as well as `BUSINESS` — the service enforces which actor may touch which `document_type`, since the router alone can no longer imply it.
+- `BUSINESS_DOCUMENT_TYPES` (`core/application_types.py`) excludes `INSPECTION_EVIDENCE`: `ApplicationDetail.requirements` and `ApplicationMeta.document_types` iterate it instead of the full `DocumentType` enum, so evidence photos never appear as a business-facing document requirement.
+- Audit actions: `INSPECTION_STARTED`, `INSPECTION_SUBMITTED` (`details.checklist_summary` = counts of PASS/FAIL/NA, computed by `core/inspection_templates.py: checklist_summary_counts()`, reused by step 7).
+
+### Approve/Reject (step 7, spec `docs/specs/07-approve-reject.md`)
+- Open to **any in-scope `LM_OFFICER`**, not just the officer who ran the inspection — safe because
+  the checklist is already frozen (`inspections.submitted_at`) before a decision is ever possible.
+- `transition()` refuses `INSPECTION → APPROVED`/`REJECTED` with **409** `"The inspection checklist
+  must be submitted before approving or rejecting"` while `inspections.submitted_at is None`.
+  `allowed_actions()` filters both out of the list under the same condition, so the UI never offers a
+  button that would immediately 409 (mirrors the identity check's client/server pairing from step 6).
+- `REJECTED`'s existing `REJECT_NOTE_MIN = 10` rule (step 3) applies unchanged, since it already keys
+  off the target status, not the source. `APPROVED` takes an optional note, like every other
+  non-`REJECTED` transition.
+- No new audit action: the existing generic `APPLICATION_STATUS_CHANGED` row gains
+  `details.checklist_summary` (via `inspections_service.checklist_summary(db, inspection_id)`) only for
+  this pair, so the decision's audit trail carries the numbers the officer saw.
+- `ApplicationDetail.inspection` (`InspectionOut`) gains `submitted_at` and `checklist_summary`
+  (`{passed, failed, na}`, `null` until submitted) so `/applications/[id]` can show the checklist result
+  inline before the officer decides, without a separate inspection fetch.
+- Instrument location lock is unchanged by this step: `LOCATION_LOCK_STATUSES` already includes
+  `APPROVED`, so the instrument stays locked until step 8 issues a certificate; `REJECTED` already falls
+  outside it and unlocks immediately.
+
 ## API
 
 Base `/api`. REST + JSON.
@@ -181,7 +215,8 @@ GET   /api/instruments/meta      # types, units, accuracy classes, regions (any 
 CRUD  /api/instruments           # write: BUSINESS (own org); read: + officials in jurisdiction; GATC 403
 CRUD  /api/applications          PATCH /api/applications/{id}/status
 POST  /api/documents             GET   /api/documents/{id}/url     # signed URL
-POST  /api/inspections           POST  /api/inspections/{id}/submit    # reserved for step 6
+GET   /api/inspections/meta      GET   /api/inspections/{id}
+PATCH /api/inspections/{id}      POST  /api/inspections/{id}/submit
 GET   /api/certificates/{id}     GET   /api/certificates/{id}/pdf
 POST  /api/jobs/expiry-check     # requires X-Cron-Secret header
 GET   /api/public/verify/{certificate_number}                     # no auth
@@ -190,7 +225,7 @@ CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + offici
 GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 8 statuses zero-filled
 GET   /api/applications?sort=      # created_desc (default) | scheduled_asc
 PATCH /api/applications/{id}/inspection   # LM_OFFICER only; reschedule while SCHEDULED
-DELETE /api/documents/{id}         # BUSINESS, DRAFT only
+DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSPECTION evidence (step 6)
 ```
 
 ### Public verify

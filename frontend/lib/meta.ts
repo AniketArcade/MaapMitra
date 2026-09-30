@@ -1,5 +1,5 @@
 import { api } from "@/lib/api";
-import type { ApplicationMeta, InstrumentMeta } from "@/lib/types";
+import type { ApplicationMeta, InspectionMeta, InstrumentMeta } from "@/lib/types";
 
 // Loaded once per page session; the backend is the single source of truth.
 let metaPromise: Promise<InstrumentMeta> | null = null;
@@ -34,4 +34,14 @@ export function getApplicationMeta(): Promise<ApplicationMeta> {
 
 export function labelFor(list: { value: string; label: string }[] | undefined, value: string): string {
   return list?.find((item) => item.value === value)?.label ?? value;
+}
+
+let inspectionMetaPromise: Promise<InspectionMeta> | null = null;
+
+export function getInspectionMeta(): Promise<InspectionMeta> {
+  inspectionMetaPromise ??= api<InspectionMeta>("/inspections/meta").catch((err: unknown) => {
+    inspectionMetaPromise = null;
+    throw err;
+  });
+  return inspectionMetaPromise;
 }

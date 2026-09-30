@@ -59,6 +59,7 @@ frontend/
 - `lib/api.ts` never sets `Content-Type` for `FormData` bodies.
 - **Never hard-code instrument types, units, accuracy classes or regions.** Load them with `getInstrumentMeta()` (`lib/meta.ts`, cached `GET /instruments/meta`). Show names, send codes.
 - **Never re-derive which instrument fields are locked.** Disable exactly `Instrument.locked_fields` (from the API); don't recompute the rule client-side from application status.
+- **Never hard-code checklist items or measurement points.** Load them with `getInspectionMeta()` (`lib/meta.ts`, cached `GET /inspections/meta`); the actual per-inspection rows (with any answers already given) come from `InspectionDetail`.
 - **Scheduling dates:** always compute "today" and the max date in the backend's timezone (`ApplicationMeta.scheduling.timezone`, via `lib/scheduling.ts`'s `todayInTimezone`/`addDaysToIsoDate`), never `new Date()`'s browser-local date. The server still validates independently.
 - Pages behind login use `components/app-shell.tsx` in their `layout.tsx` (auth guard + header nav).
 - TypeScript strict. No `any` without a comment explaining why.
@@ -80,27 +81,34 @@ frontend/
 
 | Route | Who | Notes |
 |---|---|---|
-| `/dashboard` | all logged in | Role-aware cards, each an independent-sections layout via `lib/use-async.ts` (own loading/error+retry/empty per section). Business: instruments, applications total + status chips (`GET /applications/stats`), needs-attention DRAFTs, recent. Officer: instruments, stats, needs-attention (SUBMITTED → start review, DOCUMENT_REVIEW → schedule), upcoming inspections (`sort=scheduled_asc`), recent |
+| `/dashboard` | all logged in | Role-aware cards, each an independent-sections layout via `lib/use-async.ts` (own loading/error+retry/empty per section). Business: instruments, applications total + status chips (`GET /applications/stats`), needs-attention DRAFTs, recent. Officer: instruments, stats, needs-attention (SUBMITTED → start review, DOCUMENT_REVIEW → schedule, INSPECTION → continue inspection), upcoming inspections (`sort=scheduled_asc`), recent |
 | `/instruments` | Business, officials | List + search + paging; officials read-only (jurisdiction) |
 | `/instruments/new` | Business | Form: type → unit dropdown filtered by type; state → district |
 | `/instruments/[id]` | Business, officials | Detail; business gets Edit + Delete (confirm dialog). 404 = "Instrument not found" |
 | `/instruments/[id]/edit` | Business | Same form; type is read-only; fields in `locked_fields` disabled; PATCH sends only changed fields |
 | `/applications` | Business, officials | List + status filter (URL-driven `?status=`) + search + `sort`; officials never see drafts |
 | `/applications/new?instrument_id=` | Business | Instrument without an active application → type → notes → Create draft |
-| `/applications/[id]` | Business, officials | Requirements checklist, per-type upload (draft), View/Remove, Submit / Start review / Reject / **Schedule inspection** (dialog, date input) timeline; while SCHEDULED, officer gets **Change date** (no dialog) |
-| `/inspections/[id]` | Officer | **Mobile-first** field flow (below) |
+| `/applications/[id]` | Business, officials | Requirements checklist, per-type upload (draft), View/Remove, Submit / Start review / Reject / **Schedule inspection** (dialog, date input) timeline; while SCHEDULED, officer gets **Change date** (no dialog); assigned officer gets **Start inspection** (no dialog, direct transition + navigate) once SCHEDULED, then **Continue inspection** (link to `/inspections/[id]`) while INSPECTION; once the inspection is submitted, any in-scope officer sees the checklist's PASS/FAIL/NA summary and **Approve** / **Reject** (step 7, optional-note / required-note dialogs), and the inspection link relabels to **View inspection** |
+| `/inspections/[id]` | Officer | **Mobile-first** field flow (below); read-only (`can_edit: false`) for a non-assigned officer or once submitted |
 | `/certificates/[id]` | Business | Download PDF, show QR |
 | `/admin` | Admin | Counts, expiring soon, audit log |
 | `/verify/[certificateNumber]` | Public | Big status badge: ✓ VALID / ⚠ EXPIRED / ✕ REVOKED |
 
 ## Officer field inspection (mobile-first)
 
-Flow: Instrument details → Checklist → Measurements → Photos → Remarks → Approve/Reject → Submit
+Flow: Instrument details → Checklist → Measurements → Photos → Remarks → Submit (step 6). Approve/Reject
+is not part of this flow — once submitted, it renders directly on `/applications/[id]` (Approve/Reject
+buttons plus a checklist summary line, gated on `allowed_actions`, open to any in-scope officer — not
+just the one who ran the inspection, step 7 D1).
 
 - Design it for a phone held in one hand: large tap targets, one step per screen, sticky bottom action button.
-- Photo upload uses `<input type="file" accept="image/*" capture="environment">`.
-- Confirm before Approve/Reject, since it's irreversible.
-- Keep draft progress in component state so a slow network doesn't lose input.
+- Photo upload uses `<input type="file" accept="image/*" capture="environment">`, `document_type: "INSPECTION_EVIDENCE"`.
+- Confirm before **Submit**, since it's irreversible (locks the checklist server-side, `can_edit` becomes `false`).
+- Checklist/measurement templates come from `GET /inspections/meta` (`getInspectionMeta()`) and the
+  per-inspection snapshot in `InspectionDetail` — never hard-coded, same rule as instrument/application meta.
+- Each step's Next button PATCHes that step's data before advancing (`patchInspection()`), so a slow
+  network doesn't lose input already saved; the page's own component state carries the in-progress edit
+  between PATCHes.
 
 ## Public verify page
 
