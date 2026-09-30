@@ -51,7 +51,9 @@ def test_schedule_success(client: TestClient, make_user, make_application) -> No
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["status"] == "SCHEDULED"
-    assert body["inspection"] == {"scheduled_date": d, "assigned_officer_name": officer.full_name}
+    assert body["inspection"]["scheduled_date"] == d
+    assert body["inspection"]["assigned_officer_name"] == officer.full_name
+    assert body["inspection"]["id"]  # step 6: the frontend needs it to reach /inspections/{id}
     assert body["scheduled_date"] == d
     assert body["can_reschedule"] is True
 

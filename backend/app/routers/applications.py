@@ -19,6 +19,7 @@ from app.schemas.application import (
 )
 from app.schemas.common import Page, PageParams
 from app.services import applications as service
+from app.services import inspections as inspections_service
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -36,7 +37,12 @@ Officer = Annotated[User, Depends(require_roles(Role.LM_OFFICER))]
 
 def _detail(db: DB, user: User, application_id: uuid.UUID) -> ApplicationDetail:
     application = service.load(db, user, application_id, detail=True)
-    return ApplicationDetail.build(application, user, service.allowed_actions(application, user))
+    summary = None
+    if application.inspection and application.inspection.submitted_at is not None:
+        summary = inspections_service.checklist_summary(db, application.inspection.id)
+    return ApplicationDetail.build(
+        application, user, service.allowed_actions(application, user), checklist_summary=summary
+    )
 
 
 # Declared before /{application_id} so "meta" is never parsed as an id.

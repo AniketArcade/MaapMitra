@@ -64,8 +64,8 @@ PostGIS · Leaflet maps · pgvector/RAG · OCR · Celery/Redis · native mobile 
 3. Application + document upload ✅ (spec `docs/specs/03-applications.md`)
 4. Business dashboard ✅ (spec `docs/specs/04-business-dashboard.md`)
 5. Officer dashboard ✅ (spec `docs/specs/05-officer-dashboard.md`)
-6. Inspection checklist + measurements
-7. Approve/reject workflow
+6. Inspection checklist + measurements ✅ (spec `docs/specs/06-inspection-checklist.md`)
+7. Approve/reject workflow ✅ (spec `docs/specs/07-approve-reject.md`)
 8. Certificate PDF + QR
 9. Public QR verify page
 10. Expiry dashboard + daily job

@@ -324,6 +324,10 @@ function OfficerDashboard({ user }: { user: User }) {
   const upcoming = useAsync(() =>
     api<Page<Application>>("/applications?status=SCHEDULED&sort=scheduled_asc&page_size=5"),
   );
+  // Also this step 6's "my inspections": reuses spec 05's sort, no new endpoint needed.
+  const inspecting = useAsync(() =>
+    api<Page<Application>>("/applications?status=INSPECTION&sort=scheduled_asc&page_size=5"),
+  );
   const recent = useAsync(() => api<Page<Application>>("/applications?page_size=5"));
   const meta = useApplicationMeta();
 
@@ -346,6 +350,7 @@ function OfficerDashboard({ user }: { user: User }) {
           rules={[
             { status: "SUBMITTED", hint: "Start document review", data: submitted },
             { status: "DOCUMENT_REVIEW", hint: "Schedule inspection", data: inReview },
+            { status: "INSPECTION", hint: "Continue inspection", data: inspecting },
           ]}
         />
         <UpcomingInspectionsSection upcoming={upcoming} />

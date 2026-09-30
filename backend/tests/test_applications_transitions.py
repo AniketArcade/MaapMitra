@@ -8,7 +8,7 @@ from app.core.roles import Role
 from app.db.session import SessionLocal
 from app.models import Application, ApplicationStatusHistory
 from tests.conftest import BASE_URL, auth_header, upload
-from tests.helpers import audit_rows
+from tests.helpers import audit_rows, submit_checklist
 
 
 def _status(  # noqa: ANN201
@@ -101,10 +101,14 @@ def test_evaluation_order(client: TestClient, make_user, make_application) -> No
         == 403
     )
     assert _status(client, make_user(Role.GATC), submitted.id, "DOCUMENT_REVIEW").status_code == 403
-    # Real edge, right role, not yet enabled -> 409 (SCHEDULED -> INSPECTION is step 6)
-    scheduled = make_application(owner, status="SCHEDULED", officer=officer)
-    res = _status(client, officer, scheduled.id, "INSPECTION")
-    assert (res.status_code, res.json()["detail"]) == (409, "This action is not available yet")
+    # Real edge, right role, enabled, but an edge-specific rule blocks it (step 7: checklist not
+    # yet submitted)
+    inspecting = make_application(owner, status="INSPECTION", officer=officer)
+    res = _status(client, officer, inspecting.id, "APPROVED")
+    assert (res.status_code, res.json()["detail"]) == (
+        409,
+        "The inspection checklist must be submitted before approving or rejecting",
+    )
 
 
 def test_certificate_issued_never_via_patch(
@@ -220,3 +224,108 @@ def test_concurrent_transitions_one_wins(app, make_user, make_application) -> No
             )
         )
     assert n == 1
+
+
+# Spec 07: Approve/Reject.
+
+
+def test_approve_reject_require_submitted_checklist(
+    client: TestClient,
+    make_user,
+    make_application,  # noqa: ANN001
+) -> None:
+    officer = make_user(Role.LM_OFFICER)
+    app = make_application(status="INSPECTION", officer=officer)
+    for status, note in (("APPROVED", None), ("REJECTED", "Fails the load test badly")):
+        res = _status(client, officer, app.id, status, note=note)
+        assert (res.status_code, res.json()["detail"]) == (
+            409,
+            "The inspection checklist must be submitted before approving or rejecting",
+        )
+    detail = client.get(f"/api/applications/{app.id}", headers=auth_header(officer)).json()
+    assert "APPROVED" not in detail["allowed_actions"]
+    assert "REJECTED" not in detail["allowed_actions"]
+
+
+def test_approve_by_non_assigned_officer_succeeds(
+    client: TestClient,
+    make_user,
+    make_application,  # noqa: ANN001
+) -> None:
+    assigned = make_user(Role.LM_OFFICER)
+    reviewer = make_user(Role.LM_OFFICER)  # in-scope, but not the officer who inspected
+    app = make_application(status="INSPECTION", officer=assigned)
+    submit_checklist(client, assigned, app.inspection.id)
+
+    before_history = len(_history(app.id))
+    before_audits = len(audit_rows("APPLICATION_STATUS_CHANGED"))
+    res = _status(client, reviewer, app.id, "APPROVED")
+    assert res.status_code == 200 and res.json()["status"] == "APPROVED"
+    assert len(_history(app.id)) == before_history + 1
+
+    rows = audit_rows("APPLICATION_STATUS_CHANGED")
+    assert len(rows) == before_audits + 1
+    decision = rows[-1]
+    assert decision.details["to"] == "APPROVED"
+    assert decision.details["checklist_summary"]["PASS"] > 0
+    assert decision.details["checklist_summary"]["FAIL"] == 0
+
+    instrument = client.get(
+        f"/api/instruments/{app.instrument.id}", headers=auth_header(reviewer)
+    ).json()
+    assert "address" in instrument["locked_fields"]  # stays locked through APPROVED
+
+
+def test_approve_with_no_note_succeeds(client: TestClient, make_user, make_application) -> None:  # noqa: ANN001
+    officer = make_user(Role.LM_OFFICER)
+    app = make_application(status="INSPECTION", officer=officer)
+    submit_checklist(client, officer, app.inspection.id)
+    assert _status(client, officer, app.id, "APPROVED").status_code == 200
+    assert _history(app.id)[-1] == ("INSPECTION", "APPROVED", None)
+
+
+def test_reject_from_inspection_succeeds_and_unlocks_instrument(
+    client: TestClient,
+    make_user,
+    make_application,  # noqa: ANN001
+) -> None:
+    officer = make_user(Role.LM_OFFICER)
+    reviewer = make_user(Role.LM_OFFICER)
+    app = make_application(status="INSPECTION", officer=officer)
+    submit_checklist(client, officer, app.inspection.id)
+
+    res = _status(client, reviewer, app.id, "REJECTED", note="Fails the load test badly")
+    assert res.status_code == 200 and res.json()["status"] == "REJECTED"
+
+    instrument = client.get(
+        f"/api/instruments/{app.instrument.id}", headers=auth_header(reviewer)
+    ).json()
+    assert instrument["locked_fields"] == []  # REJECTED is terminal: fully unlocked
+
+
+@pytest.mark.parametrize("note", [None, "", "too short"])
+def test_reject_from_inspection_needs_a_reason(  # noqa: ANN001
+    client: TestClient, make_user, make_application, note
+) -> None:
+    officer = make_user(Role.LM_OFFICER)
+    app = make_application(status="INSPECTION", officer=officer)
+    submit_checklist(client, officer, app.inspection.id)
+    res = _status(client, officer, app.id, "REJECTED", note=note)
+    assert res.status_code == 422
+    assert res.json()["detail"][0]["loc"] == ["body", "note"]
+
+
+def test_approve_reject_role_and_scope(client: TestClient, make_user, make_application) -> None:  # noqa: ANN001
+    owner = make_user(Role.BUSINESS)
+    officer = make_user(Role.LM_OFFICER)
+    app = make_application(owner, status="INSPECTION", officer=officer)
+    submit_checklist(client, officer, app.inspection.id)
+
+    # In scope (can see the application) but wrong role -> 403, mirroring test_evaluation_order.
+    assert _status(client, owner, app.id, "APPROVED").status_code == 403
+    assert _status(client, make_user(Role.DISTRICT_ADMIN), app.id, "APPROVED").status_code == 403
+    assert _status(client, make_user(Role.SUPER_ADMIN), app.id, "APPROVED").status_code == 403
+    assert _status(client, make_user(Role.GATC), app.id, "APPROVED").status_code == 403
+
+    outsider = make_user(Role.LM_OFFICER, district_code="RNC")
+    assert _status(client, outsider, app.id, "APPROVED").status_code == 404

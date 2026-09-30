@@ -34,6 +34,18 @@ class DocumentType(StrEnum):
     PREVIOUS_CERTIFICATE = "PREVIOUS_CERTIFICATE"
     MODEL_APPROVAL = "MODEL_APPROVAL"
     OTHER = "OTHER"
+    # Uploaded by the assigned LM_OFFICER during a field inspection (step 6), never by the
+    # business. Excluded from BUSINESS_DOCUMENT_TYPES: it's not a submission requirement.
+    INSPECTION_EVIDENCE = "INSPECTION_EVIDENCE"
+
+
+# The document types a business picks from when uploading to its own application. Excludes
+# INSPECTION_EVIDENCE, which the officer uploads through the same endpoint under different
+# rules (step 6) and which must never appear in the business-facing requirements checklist.
+# A tuple, not a set: preserves DocumentType's declaration order for stable API/UI ordering.
+BUSINESS_DOCUMENT_TYPES: tuple[DocumentType, ...] = tuple(
+    d for d in DocumentType if d != DocumentType.INSPECTION_EVIDENCE
+)
 
 
 APPLICATION_TYPE_LABELS: dict[ApplicationType, str] = {
@@ -58,6 +70,7 @@ DOCUMENT_LABELS: dict[DocumentType, str] = {
     DocumentType.PREVIOUS_CERTIFICATE: "Previous verification certificate",
     DocumentType.MODEL_APPROVAL: "Model approval certificate",
     DocumentType.OTHER: "Other supporting document",
+    DocumentType.INSPECTION_EVIDENCE: "Inspection evidence photo",
 }
 
 REQUIREMENTS: dict[ApplicationType, frozenset[DocumentType]] = {
@@ -71,5 +84,6 @@ REQUIREMENTS: dict[ApplicationType, frozenset[DocumentType]] = {
 
 MAX_FILE_BYTES = 10_485_760  # 10 MiB
 MAX_UPLOAD_REQUEST_BYTES = MAX_FILE_BYTES + 65_536  # multipart overhead
-MAX_DOCUMENTS = 10
+MAX_DOCUMENTS = 10  # counts only BUSINESS_DOCUMENT_TYPES rows for an application
+MAX_EVIDENCE_PHOTOS = 10  # ASSUMPTION: counts only INSPECTION_EVIDENCE rows, a separate cap
 ALLOWED_CONTENT_TYPES = ("application/pdf", "image/jpeg", "image/png")

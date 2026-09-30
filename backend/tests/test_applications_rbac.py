@@ -27,8 +27,12 @@ def test_owner_only_endpoints(client: TestClient, make_user, make_application, r
     url = f"/api/applications/{draft.id}"
     assert client.patch(url, json={"business_notes": "x"}, headers=headers).status_code == 403
     assert client.delete(url, headers=headers).status_code == 403
-    assert upload(client, make_user(role), draft.id).status_code == 403
-    assert client.delete(f"/api/documents/{doc_id}", headers=headers).status_code == 403
+    # LM_OFFICER is now admitted at the router (it also uploads inspection evidence, spec 06),
+    # but scope_applications hides a DRAFT application from officials entirely -> 404, not 403.
+    # Every other non-BUSINESS role is still blocked at the router itself -> 403.
+    expected = 404 if role == Role.LM_OFFICER else 403
+    assert upload(client, make_user(role), draft.id).status_code == expected
+    assert client.delete(f"/api/documents/{doc_id}", headers=headers).status_code == expected
 
 
 @pytest.mark.parametrize("role", ALL)

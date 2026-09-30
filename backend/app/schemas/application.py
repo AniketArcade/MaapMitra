@@ -7,6 +7,7 @@ from pydantic import BaseModel, StringConstraints, model_validator
 from app.core.application_types import (
     ALLOWED_CONTENT_TYPES,
     APPLICATION_TYPE_LABELS,
+    BUSINESS_DOCUMENT_TYPES,
     DOCUMENT_LABELS,
     MAX_DOCUMENTS,
     MAX_FILE_BYTES,
@@ -128,9 +129,18 @@ class RequirementOut(BaseModel):
     satisfied: bool
 
 
+class ChecklistSummary(BaseModel):
+    passed: int
+    failed: int
+    na: int
+
+
 class InspectionOut(BaseModel):
+    id: uuid.UUID
     scheduled_date: date
     assigned_officer_name: str
+    submitted_at: datetime | None
+    checklist_summary: ChecklistSummary | None
 
 
 class ApplicationDetail(ApplicationOut):
@@ -142,7 +152,14 @@ class ApplicationDetail(ApplicationOut):
     can_reschedule: bool
 
     @classmethod
-    def build(cls, a: Application, user: User, allowed_actions: list[ApplicationStatus]) -> Self:
+    def build(
+        cls,
+        a: Application,
+        user: User,
+        allowed_actions: list[ApplicationStatus],
+        *,
+        checklist_summary: dict[str, int] | None = None,
+    ) -> Self:
         present = {d.document_type for d in a.documents}
         required = REQUIREMENTS[a.application_type]
         return cls(
@@ -165,13 +182,24 @@ class ApplicationDetail(ApplicationOut):
                     required=t in required,
                     satisfied=t in present,
                 )
-                for t in DocumentType
+                for t in BUSINESS_DOCUMENT_TYPES
             ],
             allowed_actions=allowed_actions,
             inspection=(
                 InspectionOut(
+                    id=a.inspection.id,
                     scheduled_date=a.inspection.scheduled_date,
                     assigned_officer_name=a.inspection.assigned_officer.full_name,
+                    submitted_at=a.inspection.submitted_at,
+                    checklist_summary=(
+                        ChecklistSummary(
+                            passed=checklist_summary["PASS"],
+                            failed=checklist_summary["FAIL"],
+                            na=checklist_summary["NA"],
+                        )
+                        if checklist_summary
+                        else None
+                    ),
                 )
                 if a.inspection
                 else None
@@ -232,12 +260,14 @@ class ApplicationMeta(BaseModel):
                 ApplicationTypeMeta(
                     value=t,
                     label=APPLICATION_TYPE_LABELS[t],
-                    required_documents=[d for d in DocumentType if d in REQUIREMENTS[t]],
+                    required_documents=[d for d in BUSINESS_DOCUMENT_TYPES if d in REQUIREMENTS[t]],
                 )
                 for t in ApplicationType
             ],
             statuses=[LabelledValue(value=s, label=STATUS_LABELS[s]) for s in ApplicationStatus],
-            document_types=[LabelledValue(value=d, label=DOCUMENT_LABELS[d]) for d in DocumentType],
+            document_types=[
+                LabelledValue(value=d, label=DOCUMENT_LABELS[d]) for d in BUSINESS_DOCUMENT_TYPES
+            ],
             limits=UploadLimits(
                 max_file_bytes=MAX_FILE_BYTES,
                 max_documents=MAX_DOCUMENTS,

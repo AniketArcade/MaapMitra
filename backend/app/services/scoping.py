@@ -12,6 +12,7 @@ from app.core.application_types import ApplicationStatus
 from app.core.roles import Role
 from app.models.application import Application
 from app.models.document import Document
+from app.models.inspection import Inspection
 from app.models.instrument import Instrument
 from app.models.user import User
 
@@ -67,4 +68,11 @@ def scope_documents(stmt: Select[Any], user: User) -> Select[Any]:
     """Documents are only ever reached through their application's scope."""
     return scope_applications(
         stmt.join(Application, Document.application_id == Application.id), user
+    )
+
+
+def scope_inspections(stmt: Select[Any], user: User) -> Select[Any]:
+    """An inspection is only ever reached through its application's scope (step 6)."""
+    return scope_applications(
+        stmt.join(Application, Inspection.application_id == Application.id), user
     )

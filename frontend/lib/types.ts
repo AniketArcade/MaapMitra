@@ -127,7 +127,13 @@ export type DocumentOut = {
   created_at: string;
 };
 
-export type Inspection = { scheduled_date: string; assigned_officer_name: string };
+export type Inspection = {
+  id: string;
+  scheduled_date: string;
+  assigned_officer_name: string;
+  submitted_at: string | null;
+  checklist_summary: { passed: number; failed: number; na: number } | null;
+};
 
 export type ApplicationDetail = Application & {
   documents: DocumentOut[];
@@ -154,4 +160,40 @@ export type ApplicationMeta = {
   document_types: LabelledValue[];
   limits: { max_file_bytes: number; max_documents: number; allowed_content_types: string[] };
   scheduling: { timezone: string; max_days_ahead: number };
+};
+
+// Checklist/measurement results and templates are backend-owned (GET /inspections/meta).
+export type ChecklistResult = "PASS" | "FAIL" | "NA";
+
+export type ChecklistItemOut = {
+  item_key: string;
+  label: string;
+  result: ChecklistResult | null;
+  remarks: string | null;
+};
+
+export type MeasurementOut = {
+  label: string;
+  unit: string;
+  expected_value: number;
+  observed_value: number | null;
+};
+
+export type InspectionDetail = {
+  id: string;
+  application_id: string;
+  scheduled_date: string;
+  assigned_officer_name: string;
+  checklist_items: ChecklistItemOut[];
+  measurements: MeasurementOut[];
+  evidence: DocumentOut[];
+  overall_remarks: string | null;
+  submitted_at: string | null;
+  can_edit: boolean;
+};
+
+export type InspectionMeta = {
+  checklist_templates: Record<string, { key: string; label: string }[]>;
+  measurement_labels: Record<string, string[]>;
+  max_evidence_photos: number;
 };

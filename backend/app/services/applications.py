@@ -2,6 +2,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,11 @@ from app.core.application_types import (
 )
 from app.core.config import get_settings
 from app.core.errors import Conflict, Forbidden, NotFound, Unprocessable
+from app.core.inspection_templates import (
+    CHECKLIST_TEMPLATES,
+    MEASUREMENT_TEMPLATES,
+    measurement_label,
+)
 from app.core.roles import Role
 from app.models.application import (
     ACTIVE_INDEX,
@@ -25,6 +31,7 @@ from app.models.application import (
 )
 from app.models.document import Document
 from app.models.inspection import Inspection
+from app.models.inspection_checklist import InspectionChecklistItem, InspectionMeasurement
 from app.models.instrument import Instrument
 from app.models.user import User
 from app.schemas.application import (
@@ -34,6 +41,7 @@ from app.schemas.application import (
     StatusChange,
 )
 from app.services import audit
+from app.services import inspections as inspections_service
 from app.services import instruments as instruments_service
 from app.services.scoping import scope_applications
 from app.storage import StorageError, get_storage
@@ -54,9 +62,9 @@ ALLOWED_TRANSITIONS: dict[tuple[ApplicationStatus, ApplicationStatus], Edge] = {
     (S.SUBMITTED, S.DOCUMENT_REVIEW): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     (S.DOCUMENT_REVIEW, S.REJECTED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     (S.DOCUMENT_REVIEW, S.SCHEDULED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
-    (S.SCHEDULED, S.INSPECTION): Edge(frozenset({Role.LM_OFFICER}), enabled=False),  # step 6
-    (S.INSPECTION, S.APPROVED): Edge(frozenset({Role.LM_OFFICER}), enabled=False),  # step 7
-    (S.INSPECTION, S.REJECTED): Edge(frozenset({Role.LM_OFFICER}), enabled=False),  # step 7
+    (S.SCHEDULED, S.INSPECTION): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
+    (S.INSPECTION, S.APPROVED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
+    (S.INSPECTION, S.REJECTED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     # System only: happens inside certificate creation (step 8), never via PATCH.
     (S.APPROVED, S.CERTIFICATE_ISSUED): Edge(frozenset(), enabled=False),
 }
@@ -67,11 +75,18 @@ REJECT_NOTE_MIN = 10
 def allowed_actions(application: Application, user: User) -> list[ApplicationStatus]:
     """Enabled edges from the current status that the caller's role may take.
     Requirements are not considered (the UI disables Submit until they are met)."""
-    return [
+    actions = [
         to
         for (frm, to), edge in ALLOWED_TRANSITIONS.items()
         if frm == application.status and edge.enabled and user.role in edge.roles
     ]
+    if application.status == S.INSPECTION and (
+        application.inspection is None or application.inspection.submitted_at is None
+    ):
+        # Mirrors transition()'s own gate (step 7): Approve/Reject only once the checklist is
+        # submitted. Filtered here too so the UI never offers a button that would immediately 409.
+        actions = [a for a in actions if a not in (S.APPROVED, S.REJECTED)]
+    return actions
 
 
 def _now() -> datetime:
@@ -344,6 +359,19 @@ def transition(
         raise Forbidden("Insufficient permissions")
     if not edge.enabled:
         raise Conflict("This action is not available yet")
+    if target == S.INSPECTION and application.inspection.assigned_officer_id != user.id:
+        # Edge(roles, enabled) alone can't express "this specific officer": scope_applications
+        # already lets any in-jurisdiction officer read a SCHEDULED application, so this check
+        # is load-bearing, not redundant with role/scope (spec 06 §3).
+        raise Forbidden("Only the assigned officer can do this")
+    if (
+        current == S.INSPECTION
+        and target in (S.APPROVED, S.REJECTED)
+        and application.inspection.submitted_at is None
+    ):
+        # Approve/Reject is open to any in-scope officer (spec 07 D1, unlike the checklist
+        # itself), but only once the checklist is frozen by submission.
+        raise Conflict("The inspection checklist must be submitted before approving or rejecting")
 
     note = body.note or None
     if target == S.REJECTED and (note is None or len(note) < REJECT_NOTE_MIN):
@@ -374,8 +402,18 @@ def transition(
     application.status = target
     if target == S.SUBMITTED:
         application.submitted_at = _now()
-    history_note = f"Inspection scheduled for {scheduled_date}" if scheduled_date else note
+    if scheduled_date:
+        history_note = f"Inspection scheduled for {scheduled_date}"
+    elif target == S.INSPECTION:
+        history_note = "Inspection started"
+    else:
+        history_note = note
     _add_history(db, application, user, current, target, history_note)
+    details: dict[str, object] = {"from": current.value, "to": target.value, "note": note}
+    if current == S.INSPECTION and target in (S.APPROVED, S.REJECTED):
+        details["checklist_summary"] = inspections_service.checklist_summary(
+            db, application.inspection.id
+        )
     audit.log(
         db,
         actor=user,
@@ -383,7 +421,7 @@ def transition(
         entity_type="application",
         entity_id=application.id,
         organization_id=application.organization_id,
-        details={"from": current.value, "to": target.value, "note": note},
+        details=details,
         ip=ip,
     )
     if scheduled_date is not None:
@@ -418,6 +456,47 @@ def transition(
             entity_id=application.id,
             organization_id=application.organization_id,
             details={"scheduled_date": scheduled_date.isoformat()},
+            ip=ip,
+        )
+    if target == S.INSPECTION:
+        # Lock order: application (already held above), then instrument — same reasoning as the
+        # scheduling branch above (a bare row lock, not instruments_service.get(), to avoid
+        # populate_existing re-hydrating the just-mutated Application row from its stale value).
+        # Needed here (unlike scheduling) because it reads capacity/capacity_unit/instrument_type,
+        # not just to serialise against a concurrent PATCH.
+        instrument = db.execute(
+            select(Instrument).where(Instrument.id == application.instrument_id).with_for_update()
+        ).scalar_one()
+        checklist_items = CHECKLIST_TEMPLATES[instrument.instrument_type]
+        measurement_fractions = MEASUREMENT_TEMPLATES[instrument.instrument_type]
+        for item in checklist_items:
+            db.add(
+                InspectionChecklistItem(
+                    inspection_id=application.inspection.id,
+                    item_key=item.key,
+                    label=item.label,
+                )
+            )
+        for fraction in measurement_fractions:
+            db.add(
+                InspectionMeasurement(
+                    inspection_id=application.inspection.id,
+                    label=measurement_label(fraction),
+                    unit=instrument.capacity_unit.value,
+                    expected_value=instrument.capacity * Decimal(str(fraction)),
+                )
+            )
+        audit.log(
+            db,
+            actor=user,
+            action="INSPECTION_STARTED",
+            entity_type="application",
+            entity_id=application.id,
+            organization_id=application.organization_id,
+            details={
+                "checklist_item_count": len(checklist_items),
+                "measurement_count": len(measurement_fractions),
+            },
             ip=ip,
         )
     db.commit()

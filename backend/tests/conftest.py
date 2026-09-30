@@ -255,7 +255,7 @@ def make_application(make_user, make_instrument) -> Callable[..., Application]: 
                     StatusChange(status=S.REJECTED, note="Invoice is not legible"),
                     ip="test",
                 )
-            elif target == S.SCHEDULED:
+            elif target in (S.SCHEDULED, S.INSPECTION):
                 from app.core import clock
 
                 app_service.transition(
@@ -265,6 +265,12 @@ def make_application(make_user, make_instrument) -> Callable[..., Application]: 
                     StatusChange(status=S.SCHEDULED, scheduled_date=clock.today()),
                     ip="test",
                 )
+                if target == S.INSPECTION:
+                    # The assigned officer is always `reviewer` (self-assign, spec 05 D2), so
+                    # `officer` must be the one starting it too (spec 06 D1).
+                    app_service.transition(
+                        s, reviewer, application.id, StatusChange(status=S.INSPECTION), ip="test"
+                    )
             elif target != S.DOCUMENT_REVIEW:
                 raise ValueError(f"factory can't reach {status}")
             return app_service.load(s, user, application.id)
