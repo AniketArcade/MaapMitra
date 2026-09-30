@@ -3,6 +3,7 @@ from app.models.application import Application, ApplicationStatusHistory
 from app.models.audit_log import AuditLog
 from app.models.certificate import Certificate
 from app.models.document import Document
+from app.models.document_review_checklist import DocumentReviewChecklistItem
 from app.models.inspection import Inspection
 from app.models.inspection_checklist import InspectionChecklistItem, InspectionMeasurement
 from app.models.instrument import Instrument
@@ -16,6 +17,7 @@ __all__ = [
     "AuditLog",
     "Certificate",
     "Document",
+    "DocumentReviewChecklistItem",
     "Inspection",
     "InspectionChecklistItem",
     "InspectionMeasurement",

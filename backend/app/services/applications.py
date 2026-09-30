@@ -16,6 +16,7 @@ from app.core.application_types import (
     ApplicationType,
 )
 from app.core.config import get_settings
+from app.core.document_review_templates import DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
 from app.core.errors import Conflict, Forbidden, NotFound, Unprocessable
 from app.core.inspection_templates import (
     CHECKLIST_TEMPLATES,
@@ -30,6 +31,7 @@ from app.models.application import (
     application_number_seq,
 )
 from app.models.document import Document
+from app.models.document_review_checklist import DocumentReviewChecklistItem
 from app.models.inspection import Inspection
 from app.models.inspection_checklist import InspectionChecklistItem, InspectionMeasurement
 from app.models.instrument import Instrument
@@ -38,6 +40,7 @@ from app.schemas.application import (
     ApplicationCreate,
     ApplicationUpdate,
     InspectionReschedule,
+    ReviewChecklistUpdate,
     StatusChange,
 )
 from app.services import audit
@@ -61,6 +64,9 @@ ALLOWED_TRANSITIONS: dict[tuple[ApplicationStatus, ApplicationStatus], Edge] = {
     (S.DRAFT, S.SUBMITTED): Edge(frozenset({Role.BUSINESS}), enabled=True),
     (S.SUBMITTED, S.DOCUMENT_REVIEW): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     (S.DOCUMENT_REVIEW, S.REJECTED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
+    # Step 11: the "fix and resubmit" deficiency loop.
+    (S.DOCUMENT_REVIEW, S.DOCUMENTS_DEFICIENT): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
+    (S.DOCUMENTS_DEFICIENT, S.SUBMITTED): Edge(frozenset({Role.BUSINESS}), enabled=True),
     (S.DOCUMENT_REVIEW, S.SCHEDULED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     (S.SCHEDULED, S.INSPECTION): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     (S.INSPECTION, S.APPROVED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
@@ -70,6 +76,10 @@ ALLOWED_TRANSITIONS: dict[tuple[ApplicationStatus, ApplicationStatus], Edge] = {
 }
 
 REJECT_NOTE_MIN = 10
+# Step 11: DOCUMENT_REVIEW -> DOCUMENTS_DEFICIENT requires a note explaining what's missing,
+# same length rule as REJECTED's, kept as a sibling constant rather than reused so the two can
+# diverge later without an unrelated rename.
+DEFICIENCY_NOTE_MIN = 10
 
 
 def allowed_actions(application: Application, user: User) -> list[ApplicationStatus]:
@@ -380,9 +390,28 @@ def transition(
             f"A rejection reason of at least {REJECT_NOTE_MIN} characters is required",
             field="note",
         )
+    if target == S.DOCUMENTS_DEFICIENT and (note is None or len(note) < DEFICIENCY_NOTE_MIN):
+        raise Unprocessable(
+            f"A deficiency note of at least {DEFICIENCY_NOTE_MIN} characters is required",
+            field="note",
+        )
     scheduled_date: date | None = None
     if target == S.SCHEDULED:
         scheduled_date = _validate_scheduled_date(body.scheduled_date)
+        # Step 11: can't schedule until the officer has worked through the whole document
+        # review checklist, mirroring the "all required documents present" gate on submit below.
+        unchecked = list(
+            db.scalars(
+                select(DocumentReviewChecklistItem.label)
+                .where(
+                    DocumentReviewChecklistItem.application_id == application.id,
+                    DocumentReviewChecklistItem.checked.is_(False),
+                )
+                .order_by(DocumentReviewChecklistItem.created_at)
+            )
+        )
+        if unchecked:
+            raise Conflict(f"Document review checklist incomplete: {', '.join(unchecked)}")
     elif body.scheduled_date is not None:
         raise Unprocessable(
             "scheduled_date is only allowed when scheduling an inspection", field="scheduled_date"
@@ -457,6 +486,45 @@ def transition(
             entity_id=application.id,
             organization_id=application.organization_id,
             details={"scheduled_date": scheduled_date.isoformat()},
+            ip=ip,
+        )
+    if target == S.DOCUMENT_REVIEW:
+        # Step 11: snapshot the document-review checklist. If this application has been through
+        # DOCUMENT_REVIEW before (DOCUMENTS_DEFICIENT -> SUBMITTED -> DOCUMENT_REVIEW again), the
+        # rows already exist (item_key is unique per application) — reset them to unchecked
+        # rather than re-insert, so the officer re-verifies each item against the resubmission
+        # instead of inheriting stale answers, while item_key/label stay snapshotted from the
+        # first pass (mirrors inspection_checklist_items never changing after the fact).
+        existing_review_items = list(
+            db.scalars(
+                select(DocumentReviewChecklistItem).where(
+                    DocumentReviewChecklistItem.application_id == application.id
+                )
+            )
+        )
+        if existing_review_items:
+            for row in existing_review_items:
+                row.checked = False
+        else:
+            for item in DOCUMENT_REVIEW_CHECKLIST_TEMPLATE:
+                db.add(
+                    DocumentReviewChecklistItem(
+                        application_id=application.id,
+                        item_key=item.key,
+                        label=item.label,
+                    )
+                )
+        audit.log(
+            db,
+            actor=user,
+            action="DOCUMENT_REVIEW_STARTED",
+            entity_type="application",
+            entity_id=application.id,
+            organization_id=application.organization_id,
+            details={
+                "checklist_item_count": len(DOCUMENT_REVIEW_CHECKLIST_TEMPLATE),
+                "reset": bool(existing_review_items),
+            },
             ip=ip,
         )
     if target == S.INSPECTION:
@@ -547,5 +615,42 @@ def reschedule(
         details={"changes": {"scheduled_date": [old_date.isoformat(), new_date.isoformat()]}},
         ip=ip,
     )
+    db.commit()
+    return application
+
+
+def review_checklist_items(
+    db: Session, application_id: uuid.UUID
+) -> list[DocumentReviewChecklistItem]:
+    """Step 11: the document-review checklist snapshot for an application, in template order."""
+    return list(
+        db.scalars(
+            select(DocumentReviewChecklistItem)
+            .where(DocumentReviewChecklistItem.application_id == application_id)
+            .order_by(DocumentReviewChecklistItem.created_at)
+        )
+    )
+
+
+def patch_review_checklist(
+    db: Session,
+    user: User,
+    application_id: uuid.UUID,
+    body: ReviewChecklistUpdate,
+    *,
+    ip: str,
+) -> Application:
+    """Step 11: LM_OFFICER toggles individual document-review checklist items, only while the
+    application is under DOCUMENT_REVIEW. Mirrors services/inspections.py: patch()'s partial-save
+    shape (unknown item_key -> 422, no per-call audit row — same as that endpoint)."""
+    application = load(db, user, application_id, for_update=True)
+    if application.status != S.DOCUMENT_REVIEW:
+        raise Conflict("The review checklist can only be edited during document review")
+    by_key = {i.item_key: i for i in review_checklist_items(db, application.id)}
+    for entry in body.items:
+        item = by_key.get(entry.item_key)
+        if item is None:
+            raise Unprocessable(f"Unknown checklist item: {entry.item_key}", field="items")
+        item.checked = entry.checked
     db.commit()
     return application

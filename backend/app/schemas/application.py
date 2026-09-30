@@ -18,9 +18,11 @@ from app.core.application_types import (
     DocumentType,
 )
 from app.core.config import get_settings
+from app.core.document_review_templates import DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
 from app.core.instrument_types import CapacityUnit, InstrumentType
 from app.core.roles import Role
 from app.models.application import Application
+from app.models.document_review_checklist import DocumentReviewChecklistItem
 from app.models.user import User
 from app.schemas.certificate import CertificateOut
 from app.schemas.common import StrictModel
@@ -56,6 +58,17 @@ class StatusChange(StrictModel):
 
 class InspectionReschedule(StrictModel):
     scheduled_date: date
+
+
+class ReviewChecklistItemUpdate(StrictModel):
+    item_key: str
+    checked: bool
+
+
+class ReviewChecklistUpdate(StrictModel):
+    """Partial: only the entries present are applied; other rows are untouched."""
+
+    items: list[ReviewChecklistItemUpdate]
 
 
 class InstrumentSummary(BaseModel):
@@ -144,6 +157,16 @@ class InspectionOut(BaseModel):
     checklist_summary: ChecklistSummary | None
 
 
+class ReviewChecklistItemOut(BaseModel):
+    item_key: str
+    label: str
+    checked: bool
+
+    @classmethod
+    def from_model(cls, item: DocumentReviewChecklistItem) -> Self:
+        return cls(item_key=item.item_key, label=item.label, checked=item.checked)
+
+
 class ApplicationDetail(ApplicationOut):
     documents: list[DocumentOut]
     history: list[HistoryOut]
@@ -152,6 +175,7 @@ class ApplicationDetail(ApplicationOut):
     inspection: InspectionOut | None
     certificate: CertificateOut | None
     can_reschedule: bool
+    review_checklist: list[ReviewChecklistItemOut]
 
     @classmethod
     def build(
@@ -161,6 +185,7 @@ class ApplicationDetail(ApplicationOut):
         allowed_actions: list[ApplicationStatus],
         *,
         checklist_summary: dict[str, int] | None = None,
+        review_checklist: list[DocumentReviewChecklistItem] | None = None,
     ) -> Self:
         present = {d.document_type for d in a.documents}
         required = REQUIREMENTS[a.application_type]
@@ -211,6 +236,9 @@ class ApplicationDetail(ApplicationOut):
             can_reschedule=(
                 a.status == ApplicationStatus.SCHEDULED and user.role == Role.LM_OFFICER
             ),
+            review_checklist=[
+                ReviewChecklistItemOut.from_model(i) for i in (review_checklist or [])
+            ],
         )
 
 
@@ -244,12 +272,18 @@ class SchedulingMeta(BaseModel):
     max_days_ahead: int
 
 
+class ReviewChecklistTemplateItem(BaseModel):
+    key: str
+    label: str
+
+
 class ApplicationMeta(BaseModel):
     application_types: list[ApplicationTypeMeta]
     statuses: list[LabelledValue]
     document_types: list[LabelledValue]
     limits: UploadLimits
     scheduling: SchedulingMeta
+    document_review_checklist: list[ReviewChecklistTemplateItem]
 
     @classmethod
     def build(cls) -> Self:
@@ -276,4 +310,8 @@ class ApplicationMeta(BaseModel):
                 max_documents=MAX_DOCUMENTS,
                 allowed_content_types=list(ALLOWED_CONTENT_TYPES),
             ),
+            document_review_checklist=[
+                ReviewChecklistTemplateItem(key=i.key, label=i.label)
+                for i in DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
+            ],
         )

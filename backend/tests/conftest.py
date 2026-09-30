@@ -267,9 +267,33 @@ def make_application(make_user, make_instrument) -> Callable[..., Application]: 
                     StatusChange(status=S.REJECTED, note="Invoice is not legible"),
                     ip="test",
                 )
+            elif target == S.DOCUMENTS_DEFICIENT:
+                app_service.transition(
+                    s,
+                    reviewer,
+                    application.id,
+                    StatusChange(
+                        status=S.DOCUMENTS_DEFICIENT, note="Previous certificate photo unreadable"
+                    ),
+                    ip="test",
+                )
             elif target in (S.SCHEDULED, S.INSPECTION, S.APPROVED):
                 from app.core import clock
+                from app.schemas.application import ReviewChecklistItemUpdate, ReviewChecklistUpdate
 
+                # Step 11: SCHEDULED is gated on every review-checklist item being checked.
+                app_service.patch_review_checklist(
+                    s,
+                    reviewer,
+                    application.id,
+                    ReviewChecklistUpdate(
+                        items=[
+                            ReviewChecklistItemUpdate(item_key=i.item_key, checked=True)
+                            for i in app_service.review_checklist_items(s, application.id)
+                        ]
+                    ),
+                    ip="test",
+                )
                 app_service.transition(
                     s,
                     reviewer,

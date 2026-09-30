@@ -73,7 +73,9 @@ def test_officials_scoped_and_exclude_drafts(
     assert super_admin["total"] == 3  # all non-DRAFT across states
 
 
-@pytest.mark.parametrize("status", ["DRAFT", "SUBMITTED", "DOCUMENT_REVIEW", "REJECTED"])
+@pytest.mark.parametrize(
+    "status", ["DRAFT", "SUBMITTED", "DOCUMENT_REVIEW", "DOCUMENTS_DEFICIENT", "REJECTED"]
+)
 def test_consistent_with_list_totals(
     client: TestClient, make_user, make_application, status: str
 ) -> None:  # noqa: ANN001

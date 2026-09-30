@@ -107,6 +107,7 @@ Workflow for every schema change:
 | `0005` | inspection checklist (`inspection_checklist_items`, `inspection_measurements`, 3 new `inspections` columns, `checklist_result` enum, `document_type` gains `INSPECTION_EVIDENCE`) | 2026-09-30 (no seed changes; the field-inspection flow is driven live in the demo) |
 | `0006` | certificates (+ `certificate_number_seq`, `certificate_status` enum) | 2026-09-30 (no seed changes; issuance is driven live in the demo) |
 | `0007` | certificate reminders (`reminder_30d_sent_at`, `reminder_7d_sent_at`, both nullable `Date`) | 2026-09-30 (no seed changes; the expiry job is driven live in the demo) |
+| `0008` | document review checklist (`document_review_checklist_items`, `application_status` enum gains `DOCUMENTS_DEFICIENT`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/11-document-review-checklist.md`) |
 
 ## Layering rules
 
@@ -128,7 +129,8 @@ Workflow for every schema change:
 ## Data model
 
 Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications`, `documents`, `inspections`,
-`inspection_checklist_items`, `inspection_measurements`, `certificates`, `payments` (mocked), `audit_logs`
+`inspection_checklist_items`, `inspection_measurements`, `document_review_checklist_items`,
+`certificates`, `payments` (mocked), `audit_logs`
 
 - `users`: DB check constraints tie `role` to `organization_id` (BUSINESS/GATC need one, officials must not) and require `state_code`/`district_code` for officials.
 - `refresh_tokens`: SHA-256 `token_hash` only, never the raw token.
@@ -149,6 +151,13 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
 - `documents`: `storage_path` = `applications/{application_id}/{document_id}.{pdf|jpg|png}` (never a URL, never the user's filename). `content_type` is the **sniffed** type. Max 10 per application.
 - `inspections` (spec `docs/specs/05-officer-dashboard.md`, extended by `docs/specs/06-inspection-checklist.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign only in step 5: always the officer who scheduled it; also the only officer who may start/edit/submit the field inspection, step 6 D1). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` doubles as the "my inspections" list: `GET /applications?status=INSPECTION&sort=scheduled_asc`. Step 6 adds `overall_remarks` (text, null), `submitted_at` (timestamptz, null — the single source of truth for "this checklist is locked"), `submitted_by` (FK → users, `ON DELETE RESTRICT`, null).
 - `inspection_checklist_items` / `inspection_measurements` (spec `docs/specs/06-inspection-checklist.md`): one row per `CHECKLIST_TEMPLATES`/`MEASUREMENT_TEMPLATES` entry for the instrument's type (`core/inspection_templates.py`, ASSUMPTION — illustrative demo content), **snapshotted** when the inspection starts (`SCHEDULED → INSPECTION`) so a later template edit never changes an in-progress or already-submitted inspection. `inspection_checklist_items.result` is a nullable `checklist_result` enum (`PASS`/`FAIL`/`NA`); `inspection_measurements.expected_value` is `instrument.capacity * fraction` computed at start time, `observed_value` filled by the officer. Both `ON DELETE CASCADE` from `inspections`, unique on `(inspection_id, item_key)` / `(inspection_id, label)`.
+- `document_review_checklist_items` (spec `docs/specs/11-document-review-checklist.md`,
+  migration `0008`): one row per `DOCUMENT_REVIEW_CHECKLIST_TEMPLATE` entry (`core/document_review_templates.py`,
+  ASSUMPTION — illustrative demo content, a single generic list, not per-instrument-type),
+  **snapshotted** when the application enters `DOCUMENT_REVIEW` and **reset** (`checked = false`,
+  not recreated) on a later re-entry via the `DOCUMENTS_DEFICIENT → SUBMITTED → DOCUMENT_REVIEW`
+  loop. `ON DELETE CASCADE` from `applications`, unique on `(application_id, item_key)`.
+  `DOCUMENT_REVIEW → SCHEDULED` is blocked (409) until every row's `checked` is `true`.
 - `certificates` (spec `docs/specs/08-certificate-pdf-qr.md`): one row per application (`application_id` unique FK, `ON DELETE RESTRICT`), created by `services/certificates.py: issue()` — never through `transition()`. `certificate_number` = `LM-CERT-{UTC year}-{nextval('certificate_number_seq'):06d}`. `snapshot` (JSONB) freezes the instrument/business/approver fields shown on the PDF at issuance time — a deliberate JSONB blob, not relational rows like the checklist (it's one immutable bundle written once and always read whole, the opposite case from spec 06's checklist items), needed because the instrument unlocks (editable again) the moment the application reaches this terminal status. `valid_from`/`valid_until` = issue date + `CERTIFICATE_VALIDITY_YEARS` (Settings field, default 2 — ASSUMPTION, not a real Legal Metrology rule). `status` starts `VALID`; the expiry job (step 10) is the only thing that ever moves it, and only to `EXPIRED` — `REVOKED` has no writer anywhere yet (no revoke action exists). `pdf_path` = `certificates/{id}.pdf`, stored in the same single `SUPABASE_BUCKET` as documents (no new bucket). `data_hash`: SHA-256 hex of a fixed pipe-joined string of the certificate's own fields (`app/services/certificates.py: _data_hash()`) — a tamper-evidence fingerprint, not a cryptographic file signature (root `CLAUDE.md`'s "hash-based in MVP" decision). No `qr_token` column: the QR/public URL encodes `certificate_number` directly (see QR section below). `reminder_30d_sent_at`/`reminder_7d_sent_at` (migration `0007`, nullable `Date`): the expiry job's idempotency mechanism (see Expiry job below) — `NULL` means "not yet sent," never re-derived from a log.
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
@@ -161,7 +170,7 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
 
 ```
 DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
-      → APPROVED | REJECTED → CERTIFICATE_ISSUED
+                  ⇄ DOCUMENTS_DEFICIENT       → APPROVED | REJECTED → CERTIFICATE_ISSUED
 ```
 
 - Enforce it through an `ALLOWED_TRANSITIONS` map in `services/applications.py`: `(from, to) → Edge(roles, enabled)`. Later steps flip `enabled`.
@@ -169,11 +178,36 @@ DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
 - Enabled in step 5: DOCUMENT_REVIEW → SCHEDULED (LM_OFFICER, requires `scheduled_date`; §"Scheduling" below).
 - Enabled in step 6: SCHEDULED → INSPECTION (LM_OFFICER, **and only the assigned officer** — `Edge(roles, enabled)` alone can't express that identity check, so `transition()` adds it explicitly; §"Field inspection" below).
 - Enabled in step 7: INSPECTION → APPROVED / REJECTED (any in-scope LM_OFFICER, **not** assigned-officer-locked — unlike the checklist itself, deliberately, since it's frozen by then; gated on `inspections.submitted_at` being set; §"Approve/Reject" below).
+- Enabled in step 11: DOCUMENT_REVIEW → DOCUMENTS_DEFICIENT (LM_OFFICER, `note` 10–1000 chars, same length rule as REJECTED's own `REJECT_NOTE_MIN` but a sibling `DEFICIENCY_NOTE_MIN` constant), DOCUMENTS_DEFICIENT → SUBMITTED (BUSINESS, the resubmit action — no extra validation). DOCUMENTS_DEFICIENT is **not terminal**; §"Document review checklist" below.
 - `PATCH /applications/{id}/status` evaluation order: out of scope → 404; not an edge → 409 `Invalid status change`; wrong role → 403; not enabled → 409 `This action is not available yet`; edge rules → 409/422; apply (row lock, history row, audit row, one transaction).
 - `ApplicationDetail.allowed_actions` lists the enabled edges the caller's role may take (requirements not considered).
 - The status PATCH endpoint validates against that map and the caller's role. It never sets an arbitrary status.
 - **APPROVED → CERTIFICATE_ISSUED happens in the same DB transaction** as certificate creation.
-- REJECTED is terminal. Re-verification means a new application.
+- REJECTED is terminal. Re-verification means a new application. DOCUMENTS_DEFICIENT is the one
+  non-terminal "dead end" fix: the business resubmits into SUBMITTED, not a new application.
+
+### Document review checklist (step 11, spec `docs/specs/11-document-review-checklist.md`)
+- `document_review_checklist_items` (`app/models/document_review_checklist.py`, ASSUMPTION —
+  illustrative demo content, `core/document_review_templates.py`): one row per
+  `DOCUMENT_REVIEW_CHECKLIST_TEMPLATE` entry (a single generic 8-item list, not per-`InstrumentType`
+  like the inspection checklist — document review checks the submission as a whole), unique on
+  `(application_id, item_key)`.
+- **Snapshotted when the application enters `DOCUMENT_REVIEW`** (`transition()`, mirroring spec 06's
+  inspection-checklist snapshot timing): rows are created once; if the application later cycles
+  `DOCUMENTS_DEFICIENT → SUBMITTED → DOCUMENT_REVIEW` again, the existing rows are **reset**
+  (`checked = false`), never recreated — `item_key`/`label` stay snapshotted from the first pass
+  (a later template edit never changes an application already under review), but the officer must
+  re-verify every item against the resubmission.
+- `PATCH /api/applications/{id}/review-checklist` (LM_OFFICER only, application must be
+  `DOCUMENT_REVIEW`; 409 otherwise) toggles individual items — same partial-save shape as
+  `PATCH /api/inspections/{id}` (unknown `item_key` → 422, no audit row per call).
+- **`DOCUMENT_REVIEW → SCHEDULED` is additionally gated**: 409 `"Document review checklist
+  incomplete: …"` unless every row for the application has `checked = true` — mirrors the "all
+  required documents present" gate on `DRAFT → SUBMITTED`.
+- `ApplicationDetail.review_checklist` and `GET /applications/meta`'s
+  `document_review_checklist` (the template) follow the existing checklist-template meta pattern
+  (`GET /inspections/meta`'s `checklist_templates`) — the frontend never hardcodes the list.
+- Audit action: `DOCUMENT_REVIEW_STARTED` (`details.checklist_item_count`, `details.reset`).
 
 Certificate status: `VALID` · `EXPIRED` · `REVOKED`
 
@@ -268,11 +302,12 @@ POST  /api/jobs/expiry-check     # requires X-Cron-Secret header, no rate limit 
 GET   /api/admin/certificates/stats            # ADMIN_ROLES; {valid, expiring_soon, expired, revoked}
 GET   /api/admin/certificates/expiring-soon    # ADMIN_ROLES; Page[CertificateOut], valid_until asc
 GET   /api/public/verify/{certificate_number}                     # no auth
-GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}
+GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}, document_review_checklist (step 11)
 CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
-GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 8 statuses zero-filled
+GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 9 statuses zero-filled (step 11 adds DOCUMENTS_DEFICIENT)
 GET   /api/applications?sort=      # created_desc (default) | scheduled_asc
 PATCH /api/applications/{id}/inspection   # LM_OFFICER only; reschedule while SCHEDULED
+PATCH /api/applications/{id}/review-checklist   # LM_OFFICER only, DOCUMENT_REVIEW only; toggle document-review checklist items (step 11)
 DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSPECTION evidence (step 6)
 ```
 

@@ -15,6 +15,7 @@ from app.schemas.application import (
     ApplicationStats,
     ApplicationUpdate,
     InspectionReschedule,
+    ReviewChecklistUpdate,
     StatusChange,
 )
 from app.schemas.common import Page, PageParams
@@ -41,8 +42,13 @@ def _detail(db: DB, user: User, application_id: uuid.UUID) -> ApplicationDetail:
     summary = None
     if application.inspection and application.inspection.submitted_at is not None:
         summary = inspections_service.checklist_summary(db, application.inspection.id)
+    review_checklist = service.review_checklist_items(db, application.id)
     return ApplicationDetail.build(
-        application, user, service.allowed_actions(application, user), checklist_summary=summary
+        application,
+        user,
+        service.allowed_actions(application, user),
+        checklist_summary=summary,
+        review_checklist=review_checklist,
     )
 
 
@@ -116,6 +122,18 @@ def change_status(
     request: Request, application_id: uuid.UUID, body: StatusChange, user: Reader, db: DB
 ) -> ApplicationDetail:
     service.transition(db, user, application_id, body, ip=get_client_ip(request))
+    return _detail(db, user, application_id)
+
+
+@router.patch("/{application_id}/review-checklist")
+def patch_review_checklist(
+    request: Request,
+    application_id: uuid.UUID,
+    body: ReviewChecklistUpdate,
+    user: Officer,
+    db: DB,
+) -> ApplicationDetail:
+    service.patch_review_checklist(db, user, application_id, body, ip=get_client_ip(request))
     return _detail(db, user, application_id)
 
 
