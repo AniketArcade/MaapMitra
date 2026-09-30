@@ -70,6 +70,10 @@ export type Instrument = {
   created_at: string;
   updated_at: string;
   active_application: ActiveApplicationRef | null;
+  // Fields the backend refuses to PATCH right now (identity fields while any application is
+  // active; address/latitude/longitude too once an inspection is scheduled). Never re-derive
+  // this rule client-side — disable exactly what's listed here (spec 05 D10).
+  locked_fields: string[];
 };
 
 export type InstrumentMeta = {
@@ -109,6 +113,7 @@ export type Application = {
   district_code: string;
   business_notes: string | null;
   submitted_at: string | null;
+  scheduled_date: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -122,6 +127,8 @@ export type DocumentOut = {
   created_at: string;
 };
 
+export type Inspection = { scheduled_date: string; assigned_officer_name: string };
+
 export type ApplicationDetail = Application & {
   documents: DocumentOut[];
   history: {
@@ -133,6 +140,8 @@ export type ApplicationDetail = Application & {
   }[];
   requirements: { document_type: string; label: string; required: boolean; satisfied: boolean }[];
   allowed_actions: string[];
+  inspection: Inspection | null;
+  can_reschedule: boolean;
 };
 
 export type ApplicationStats = { total: number; by_status: Record<string, number> };
@@ -144,4 +153,5 @@ export type ApplicationMeta = {
   statuses: LabelledValue[];
   document_types: LabelledValue[];
   limits: { max_file_bytes: number; max_documents: number; allowed_content_types: string[] };
+  scheduling: { timezone: string; max_days_ahead: number };
 };

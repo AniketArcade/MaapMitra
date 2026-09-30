@@ -11,8 +11,19 @@ from tests.conftest import BASE_URL, auth_header, upload
 from tests.helpers import audit_rows
 
 
-def _status(client: TestClient, user, application_id, status: str, note: str | None = None):  # noqa: ANN001, ANN202
-    body = {"status": status} | ({"note": note} if note is not None else {})
+def _status(  # noqa: ANN201
+    client: TestClient,
+    user,  # noqa: ANN001
+    application_id,  # noqa: ANN001
+    status: str,
+    note: str | None = None,
+    scheduled_date: str | None = None,
+):
+    body = (
+        {"status": status}
+        | ({"note": note} if note is not None else {})
+        | ({"scheduled_date": scheduled_date} if scheduled_date is not None else {})
+    )
     return client.patch(
         f"/api/applications/{application_id}/status", json=body, headers=auth_header(user)
     )
@@ -40,7 +51,8 @@ def test_happy_path_submit_review_reject(client: TestClient, make_user, make_app
     assert res.json()["allowed_actions"] == []  # owner can't start review
 
     res = _status(client, officer, app.id, "DOCUMENT_REVIEW")
-    assert res.status_code == 200 and res.json()["allowed_actions"] == ["REJECTED"]
+    assert res.status_code == 200
+    assert set(res.json()["allowed_actions"]) == {"REJECTED", "SCHEDULED"}
 
     res = _status(client, officer, app.id, "REJECTED", note="Invoice is not legible")
     assert res.status_code == 200 and res.json()["status"] == "REJECTED"
@@ -89,9 +101,9 @@ def test_evaluation_order(client: TestClient, make_user, make_application) -> No
         == 403
     )
     assert _status(client, make_user(Role.GATC), submitted.id, "DOCUMENT_REVIEW").status_code == 403
-    # Real edge, right role, not yet enabled -> 409
-    in_review = make_application(owner, status="DOCUMENT_REVIEW", officer=officer)
-    res = _status(client, officer, in_review.id, "SCHEDULED")
+    # Real edge, right role, not yet enabled -> 409 (SCHEDULED -> INSPECTION is step 6)
+    scheduled = make_application(owner, status="SCHEDULED", officer=officer)
+    res = _status(client, officer, scheduled.id, "INSPECTION")
     assert (res.status_code, res.json()["detail"]) == (409, "This action is not available yet")
 
 
@@ -176,8 +188,8 @@ def test_each_transition_writes_one_history_and_audit_row(
     assert len(review) == 1
     assert review[0].details == {"from": "SUBMITTED", "to": "DOCUMENT_REVIEW", "note": None}
     assert review[0].actor_user_id == officer.id
-    # A refused transition writes nothing
-    assert _status(client, officer, app.id, "SCHEDULED").status_code == 409
+    # A refused transition writes nothing (INSPECTION is never a direct edge from DOCUMENT_REVIEW)
+    assert _status(client, officer, app.id, "INSPECTION").status_code == 409
     assert len(_history(app.id)) == before + 1
 
 

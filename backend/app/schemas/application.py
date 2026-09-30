@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Self
 
 from pydantic import BaseModel, StringConstraints, model_validator
@@ -16,8 +16,11 @@ from app.core.application_types import (
     ApplicationType,
     DocumentType,
 )
+from app.core.config import get_settings
 from app.core.instrument_types import CapacityUnit, InstrumentType
+from app.core.roles import Role
 from app.models.application import Application
+from app.models.user import User
 from app.schemas.common import StrictModel
 from app.schemas.document import DocumentOut
 
@@ -46,6 +49,11 @@ class ApplicationUpdate(StrictModel):
 class StatusChange(StrictModel):
     status: ApplicationStatus
     note: Notes | None = None
+    scheduled_date: date | None = None  # required for, and only for, target SCHEDULED
+
+
+class InspectionReschedule(StrictModel):
+    scheduled_date: date
 
 
 class InstrumentSummary(BaseModel):
@@ -71,6 +79,7 @@ class ApplicationOut(BaseModel):
     district_code: str
     business_notes: str | None
     submitted_at: datetime | None
+    scheduled_date: date | None
     created_at: datetime
     updated_at: datetime
 
@@ -98,6 +107,7 @@ class ApplicationOut(BaseModel):
             district_code=a.district_code,
             business_notes=a.business_notes,
             submitted_at=a.submitted_at,
+            scheduled_date=a.inspection.scheduled_date if a.inspection else None,
             created_at=a.created_at,
             updated_at=a.updated_at,
         )
@@ -118,14 +128,21 @@ class RequirementOut(BaseModel):
     satisfied: bool
 
 
+class InspectionOut(BaseModel):
+    scheduled_date: date
+    assigned_officer_name: str
+
+
 class ApplicationDetail(ApplicationOut):
     documents: list[DocumentOut]
     history: list[HistoryOut]
     requirements: list[RequirementOut]
     allowed_actions: list[ApplicationStatus]
+    inspection: InspectionOut | None
+    can_reschedule: bool
 
     @classmethod
-    def build(cls, a: Application, allowed_actions: list[ApplicationStatus]) -> Self:
+    def build(cls, a: Application, user: User, allowed_actions: list[ApplicationStatus]) -> Self:
         present = {d.document_type for d in a.documents}
         required = REQUIREMENTS[a.application_type]
         return cls(
@@ -151,6 +168,18 @@ class ApplicationDetail(ApplicationOut):
                 for t in DocumentType
             ],
             allowed_actions=allowed_actions,
+            inspection=(
+                InspectionOut(
+                    scheduled_date=a.inspection.scheduled_date,
+                    assigned_officer_name=a.inspection.assigned_officer.full_name,
+                )
+                if a.inspection
+                else None
+            ),
+            # Scope already implies jurisdiction: reaching this point means the caller may read it.
+            can_reschedule=(
+                a.status == ApplicationStatus.SCHEDULED and user.role == Role.LM_OFFICER
+            ),
         )
 
 
@@ -179,15 +208,26 @@ class UploadLimits(BaseModel):
     allowed_content_types: list[str]
 
 
+class SchedulingMeta(BaseModel):
+    timezone: str
+    max_days_ahead: int
+
+
 class ApplicationMeta(BaseModel):
     application_types: list[ApplicationTypeMeta]
     statuses: list[LabelledValue]
     document_types: list[LabelledValue]
     limits: UploadLimits
+    scheduling: SchedulingMeta
 
     @classmethod
     def build(cls) -> Self:
+        settings = get_settings()
         return cls(
+            scheduling=SchedulingMeta(
+                timezone=settings.APP_TIMEZONE,
+                max_days_ahead=settings.SCHEDULING_MAX_DAYS_AHEAD,
+            ),
             application_types=[
                 ApplicationTypeMeta(
                     value=t,

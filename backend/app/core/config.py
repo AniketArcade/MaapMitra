@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # 0 = use the socket peer address. Measure on deploy (Vercel rewrite -> Render).
     TRUSTED_PROXY_HOPS: int = Field(default=0, ge=0)
 
+    # Scheduling (step 5). ASSUMPTION: deployment serves India; change if not.
+    APP_TIMEZONE: str = "Asia/Kolkata"
+    SCHEDULING_MAX_DAYS_AHEAD: int = Field(default=180, ge=1)
+
     @field_validator("SUPABASE_URL")
     @classmethod
     def origin_only(cls, v: str | None) -> str | None:

@@ -1,5 +1,5 @@
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
@@ -14,6 +14,7 @@ from app.schemas.application import (
     ApplicationOut,
     ApplicationStats,
     ApplicationUpdate,
+    InspectionReschedule,
     StatusChange,
 )
 from app.schemas.common import Page, PageParams
@@ -30,11 +31,12 @@ Reader = Annotated[
     ),
 ]
 Owner = Annotated[User, Depends(require_roles(Role.BUSINESS))]
+Officer = Annotated[User, Depends(require_roles(Role.LM_OFFICER))]
 
 
 def _detail(db: DB, user: User, application_id: uuid.UUID) -> ApplicationDetail:
     application = service.load(db, user, application_id, detail=True)
-    return ApplicationDetail.build(application, service.allowed_actions(application, user))
+    return ApplicationDetail.build(application, user, service.allowed_actions(application, user))
 
 
 # Declared before /{application_id} so "meta" is never parsed as an id.
@@ -64,6 +66,7 @@ def list_applications(
     q: Annotated[str | None, Query(max_length=100)] = None,
     status_filter: Annotated[ApplicationStatus | None, Query(alias="status")] = None,
     instrument_id: uuid.UUID | None = None,
+    sort: Literal["created_desc", "scheduled_asc"] = "created_desc",
 ) -> Page[ApplicationOut]:
     items, total = service.list_applications(
         db,
@@ -73,6 +76,7 @@ def list_applications(
         instrument_id=instrument_id,
         limit=paging.page_size,
         offset=paging.offset,
+        sort=sort,
     )
     return Page(
         items=[ApplicationOut.from_model(a) for a in items],
@@ -105,4 +109,16 @@ def change_status(
     request: Request, application_id: uuid.UUID, body: StatusChange, user: Reader, db: DB
 ) -> ApplicationDetail:
     service.transition(db, user, application_id, body, ip=get_client_ip(request))
+    return _detail(db, user, application_id)
+
+
+@router.patch("/{application_id}/inspection")
+def reschedule_inspection(
+    request: Request,
+    application_id: uuid.UUID,
+    body: InspectionReschedule,
+    user: Officer,
+    db: DB,
+) -> ApplicationDetail:
+    service.reschedule(db, user, application_id, body, ip=get_client_ip(request))
     return _detail(db, user, application_id)

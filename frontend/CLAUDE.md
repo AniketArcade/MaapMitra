@@ -58,6 +58,8 @@ frontend/
 - **Viewing a document:** call `window.open("", "_blank")` synchronously in the click handler, then set its location to the `?disposition=inline` URL; close it on failure (popup blockers). **Downloading:** fetch `?disposition=attachment` and `window.location.assign()` it.
 - `lib/api.ts` never sets `Content-Type` for `FormData` bodies.
 - **Never hard-code instrument types, units, accuracy classes or regions.** Load them with `getInstrumentMeta()` (`lib/meta.ts`, cached `GET /instruments/meta`). Show names, send codes.
+- **Never re-derive which instrument fields are locked.** Disable exactly `Instrument.locked_fields` (from the API); don't recompute the rule client-side from application status.
+- **Scheduling dates:** always compute "today" and the max date in the backend's timezone (`ApplicationMeta.scheduling.timezone`, via `lib/scheduling.ts`'s `todayInTimezone`/`addDaysToIsoDate`), never `new Date()`'s browser-local date. The server still validates independently.
 - Pages behind login use `components/app-shell.tsx` in their `layout.tsx` (auth guard + header nav).
 - TypeScript strict. No `any` without a comment explaining why.
 - Server components by default. Use `"use client"` only for state, effects or event handlers.
@@ -78,14 +80,14 @@ frontend/
 
 | Route | Who | Notes |
 |---|---|---|
-| `/dashboard` | all logged in | Role-aware cards. Business: 4 independent sections (instruments, applications total + status chips via `GET /applications/stats`, needs-attention DRAFTs, recent) — each with its own loading/error+retry/empty state (`lib/use-async.ts`) |
+| `/dashboard` | all logged in | Role-aware cards, each an independent-sections layout via `lib/use-async.ts` (own loading/error+retry/empty per section). Business: instruments, applications total + status chips (`GET /applications/stats`), needs-attention DRAFTs, recent. Officer: instruments, stats, needs-attention (SUBMITTED → start review, DOCUMENT_REVIEW → schedule), upcoming inspections (`sort=scheduled_asc`), recent |
 | `/instruments` | Business, officials | List + search + paging; officials read-only (jurisdiction) |
 | `/instruments/new` | Business | Form: type → unit dropdown filtered by type; state → district |
 | `/instruments/[id]` | Business, officials | Detail; business gets Edit + Delete (confirm dialog). 404 = "Instrument not found" |
-| `/instruments/[id]/edit` | Business | Same form; type is read-only; PATCH sends only changed fields |
-| `/applications` | Business, officials | List + status filter (`?status=`) + search; officials never see drafts |
+| `/instruments/[id]/edit` | Business | Same form; type is read-only; fields in `locked_fields` disabled; PATCH sends only changed fields |
+| `/applications` | Business, officials | List + status filter (URL-driven `?status=`) + search + `sort`; officials never see drafts |
 | `/applications/new?instrument_id=` | Business | Instrument without an active application → type → notes → Create draft |
-| `/applications/[id]` | Business, officials | Requirements checklist, per-type upload (draft), View/Remove, Submit / Start review / Reject, timeline |
+| `/applications/[id]` | Business, officials | Requirements checklist, per-type upload (draft), View/Remove, Submit / Start review / Reject / **Schedule inspection** (dialog, date input) timeline; while SCHEDULED, officer gets **Change date** (no dialog) |
 | `/inspections/[id]` | Officer | **Mobile-first** field flow (below) |
 | `/certificates/[id]` | Business | Download PDF, show QR |
 | `/admin` | Admin | Counts, expiring soon, audit log |

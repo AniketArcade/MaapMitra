@@ -1,18 +1,20 @@
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, contains_eager, joinedload, selectinload
 
+from app.core import clock
 from app.core.application_types import (
     DOCUMENT_LABELS,
     REQUIREMENTS,
     ApplicationStatus,
     ApplicationType,
 )
+from app.core.config import get_settings
 from app.core.errors import Conflict, Forbidden, NotFound, Unprocessable
 from app.core.roles import Role
 from app.models.application import (
@@ -22,9 +24,15 @@ from app.models.application import (
     application_number_seq,
 )
 from app.models.document import Document
+from app.models.inspection import Inspection
 from app.models.instrument import Instrument
 from app.models.user import User
-from app.schemas.application import ApplicationCreate, ApplicationUpdate, StatusChange
+from app.schemas.application import (
+    ApplicationCreate,
+    ApplicationUpdate,
+    InspectionReschedule,
+    StatusChange,
+)
 from app.services import audit
 from app.services import instruments as instruments_service
 from app.services.scoping import scope_applications
@@ -45,7 +53,7 @@ ALLOWED_TRANSITIONS: dict[tuple[ApplicationStatus, ApplicationStatus], Edge] = {
     (S.DRAFT, S.SUBMITTED): Edge(frozenset({Role.BUSINESS}), enabled=True),
     (S.SUBMITTED, S.DOCUMENT_REVIEW): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     (S.DOCUMENT_REVIEW, S.REJECTED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
-    (S.DOCUMENT_REVIEW, S.SCHEDULED): Edge(frozenset({Role.LM_OFFICER}), enabled=False),  # step 5
+    (S.DOCUMENT_REVIEW, S.SCHEDULED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     (S.SCHEDULED, S.INSPECTION): Edge(frozenset({Role.LM_OFFICER}), enabled=False),  # step 6
     (S.INSPECTION, S.APPROVED): Edge(frozenset({Role.LM_OFFICER}), enabled=False),  # step 7
     (S.INSPECTION, S.REJECTED): Edge(frozenset({Role.LM_OFFICER}), enabled=False),  # step 7
@@ -72,7 +80,9 @@ def _now() -> datetime:
 
 def _scoped(user: User) -> Select[tuple[Application]]:
     stmt = select(Application).options(
-        joinedload(Application.instrument), joinedload(Application.organization)
+        joinedload(Application.instrument),
+        joinedload(Application.organization),
+        joinedload(Application.inspection).joinedload(Inspection.assigned_officer),
     )
     return scope_applications(stmt, user)
 
@@ -133,6 +143,7 @@ def create(db: Session, user: User, body: ApplicationCreate, *, ip: str) -> Appl
         district_code=instrument.district_code,
         business_notes=body.business_notes or None,
         created_by=user.id,
+        inspection=None,  # a brand-new application never has one; avoids a lazy="raise" trip
     )
     db.add(application)
     try:
@@ -176,8 +187,15 @@ def list_applications(
     instrument_id: uuid.UUID | None,
     limit: int,
     offset: int,
+    sort: str = "created_desc",
 ) -> tuple[list[Application], int]:
-    stmt = scope_applications(select(Application).join(Application.instrument), user)
+    # Explicit outerjoin (not joinedload) to Inspection: scheduled_asc needs to ORDER BY a
+    # column on it, and SQLAlchemy can't order by a join it added implicitly via joinedload.
+    # contains_eager reuses this same join for eager loading, so there's still one join.
+    stmt = scope_applications(
+        select(Application).join(Application.instrument).outerjoin(Application.inspection),
+        user,
+    )
     if q:
         pattern = f"%{_escape_like(q)}%"
         stmt = stmt.where(
@@ -193,9 +211,18 @@ def list_applications(
         stmt = stmt.where(Application.instrument_id == instrument_id)
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    order = (
+        (Inspection.scheduled_date.asc().nulls_last(), Application.id)
+        if sort == "scheduled_asc"
+        else (Application.created_at.desc(), Application.id)
+    )
     items = db.scalars(
-        stmt.options(joinedload(Application.instrument), joinedload(Application.organization))
-        .order_by(Application.created_at.desc(), Application.id)
+        stmt.options(
+            joinedload(Application.instrument),
+            joinedload(Application.organization),
+            contains_eager(Application.inspection),
+        )
+        .order_by(*order)
         .limit(limit)
         .offset(offset)
     ).all()
@@ -209,6 +236,18 @@ def stats(db: Session, user: User) -> dict[ApplicationStatus, int]:
         select(Application.status, func.count()).group_by(Application.status), user
     )
     return dict(db.execute(stmt).all())
+
+
+def _validate_scheduled_date(d: date | None) -> date:
+    """Shared by scheduling and reschedule: today() is in APP_TIMEZONE, not UTC (a UTC-only
+    check would reject IST dates for up to 5h30m around midnight)."""
+    if d is None:
+        raise Unprocessable("A scheduled_date is required", field="scheduled_date")
+    lo = clock.today()
+    hi = lo + timedelta(days=get_settings().SCHEDULING_MAX_DAYS_AHEAD)
+    if not (lo <= d <= hi):
+        raise Unprocessable(f"scheduled_date must be between {lo} and {hi}", field="scheduled_date")
+    return d
 
 
 def _require_draft(application: Application, what: str) -> None:
@@ -312,6 +351,13 @@ def transition(
             f"A rejection reason of at least {REJECT_NOTE_MIN} characters is required",
             field="note",
         )
+    scheduled_date: date | None = None
+    if target == S.SCHEDULED:
+        scheduled_date = _validate_scheduled_date(body.scheduled_date)
+    elif body.scheduled_date is not None:
+        raise Unprocessable(
+            "scheduled_date is only allowed when scheduling an inspection", field="scheduled_date"
+        )
     if target == S.SUBMITTED:
         present = set(
             db.scalars(
@@ -328,7 +374,8 @@ def transition(
     application.status = target
     if target == S.SUBMITTED:
         application.submitted_at = _now()
-    _add_history(db, application, user, current, target, note)
+    history_note = f"Inspection scheduled for {scheduled_date}" if scheduled_date else note
+    _add_history(db, application, user, current, target, history_note)
     audit.log(
         db,
         actor=user,
@@ -337,6 +384,69 @@ def transition(
         entity_id=application.id,
         organization_id=application.organization_id,
         details={"from": current.value, "to": target.value, "note": note},
+        ip=ip,
+    )
+    if scheduled_date is not None:
+        # Lock order: application (already held above), then instrument. A bare row lock, not
+        # instruments_service.get(): that function's query joinedloads Instrument.active_application
+        # (this same Application row) and, combined with for_update's populate_existing=True,
+        # would re-hydrate our just-set, not-yet-flushed application.status from its still-stale
+        # DB value — silently reverting the assignment above. This lock has no write of its own;
+        # it exists purely to serialise against a concurrent instrument PATCH, so an address
+        # change can never land after the instrument becomes SCHEDULED-locked.
+        db.execute(
+            select(Instrument.id)
+            .where(Instrument.id == application.instrument_id)
+            .with_for_update()
+        ).one()
+        inspection = Inspection(
+            application_id=application.id,
+            scheduled_date=scheduled_date,
+            assigned_officer_id=user.id,
+        )
+        db.add(inspection)
+        # Keep the already-loaded (lazy="raise") relationship in sync in-memory: the caller's
+        # returned `application` was loaded before this row existed, and expire_on_commit=False
+        # means it would otherwise never see it without a fresh query.
+        inspection.assigned_officer = user
+        application.inspection = inspection
+        audit.log(
+            db,
+            actor=user,
+            action="INSPECTION_SCHEDULED",
+            entity_type="application",
+            entity_id=application.id,
+            organization_id=application.organization_id,
+            details={"scheduled_date": scheduled_date.isoformat()},
+            ip=ip,
+        )
+    db.commit()
+    return application
+
+
+def reschedule(
+    db: Session, user: User, application_id: uuid.UUID, body: InspectionReschedule, *, ip: str
+) -> Application:
+    application = load(db, user, application_id, for_update=True)
+    if application.status != S.SCHEDULED:
+        raise Conflict("Only a scheduled inspection can be rescheduled")
+    new_date = _validate_scheduled_date(body.scheduled_date)
+    inspection = application.inspection
+    assert inspection is not None  # SCHEDULED implies a row was created when it got there
+    if inspection.scheduled_date == new_date:
+        db.commit()  # releases the lock; nothing written, updated_at unchanged
+        return application
+
+    old_date = inspection.scheduled_date
+    inspection.scheduled_date = new_date
+    audit.log(
+        db,
+        actor=user,
+        action="INSPECTION_RESCHEDULED",
+        entity_type="application",
+        entity_id=application.id,
+        organization_id=application.organization_id,
+        details={"changes": {"scheduled_date": [old_date.isoformat(), new_date.isoformat()]}},
         ip=ip,
     )
     db.commit()

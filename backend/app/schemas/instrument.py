@@ -6,6 +6,7 @@ from typing import Annotated, Self
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
 from app.core.application_types import ApplicationStatus
+from app.core.instrument_lock import locked_fields
 from app.core.instrument_types import (
     TYPE_LABELS,
     UNIT_FAMILY,
@@ -95,10 +96,14 @@ class InstrumentOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     active_application: ActiveApplicationRef | None = None
+    locked_fields: list[str]
 
     @classmethod
     def from_model(cls, i: Instrument, viewer: User | None = None) -> Self:
-        active = i.active_application
+        # Unfiltered: locking is a business-only concern (only BUSINESS can PATCH), independent
+        # of the officials-never-see-DRAFT display rule below.
+        raw_active = i.active_application
+        active = raw_active
         # Officials never see drafts (spec 03 §4), so a draft is reported as "none".
         if (
             active is not None
@@ -125,6 +130,7 @@ class InstrumentOut(BaseModel):
             longitude=float(i.longitude) if i.longitude is not None else None,
             created_at=i.created_at,
             updated_at=i.updated_at,
+            locked_fields=sorted(locked_fields(raw_active.status if raw_active else None)),
             active_application=(
                 ActiveApplicationRef(
                     id=active.id,
