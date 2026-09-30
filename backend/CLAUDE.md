@@ -62,6 +62,8 @@ RESEND_API_KEY=...
 CRON_SECRET=...
 ENV=development                              # development | test | production (cookie Secure flag, seed guard)
 TRUSTED_PROXY_HOPS=0                         # proxies appending X-Forwarded-For; measure on deploy
+APP_TIMEZONE=Asia/Kolkata                    # scheduling "today" (step 5); ASSUMPTION: deployment serves India
+SCHEDULING_MAX_DAYS_AHEAD=180                # typo guard on scheduled_date
 ```
 
 Load it through `pydantic-settings` in `core/config.py`. Never read `os.environ` scattered around the code.
@@ -91,6 +93,7 @@ Workflow for every schema change:
 | `0001` | auth (organizations, users, refresh_tokens, audit_logs) | 2026-09-30 (demo seed run the same day) |
 | `0002` | instruments (+ `instrument_uid_seq`, 3 enums, functional unique index) | 2026-09-30 (seed: `OTH-0001`) |
 | `0003` | applications, application_status_history, documents (+ `application_number_seq`, 3 enums, partial unique index) | 2026-09-30 (bucket `documents` created; seed: `APP-2026-000001` for `OTH-0001`) |
+| `0004` | inspections (+ `ix_inspections_officer_date`) | 2026-09-30 (no seed changes; scheduling is driven live in the demo) |
 
 ## Layering rules
 
@@ -117,10 +120,11 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
 - `users`: DB check constraints tie `role` to `organization_id` (BUSINESS/GATC need one, officials must not) and require `state_code`/`district_code` for officials.
 - `refresh_tokens`: SHA-256 `token_hash` only, never the raw token.
 - `audit_logs`: append-only. Write rows through `services/audit.log(db, *, actor, action, entity_type, entity_id, organization_id, details, ip)` in the caller's transaction. Routers pass `ip=get_client_ip(request)`.
-- `instruments` (spec `docs/specs/02-instruments.md`):
+- `instruments` (spec `docs/specs/02-instruments.md`, lock activated by `docs/specs/05-officer-dashboard.md`):
   - `instrument_uid` = `LM-{state}-{district}-{nextval('instrument_uid_seq'):06d}`. It's global, so there are gaps. It's permanent, even if the location changes, and never a credential.
   - Global unique index `ix_instruments_mfr_serial` on `(lower(manufacturer), serial_number)`. The index is the duplicate check: catch the `IntegrityError` → 409. Serial numbers are stored uppercased.
-  - Delete is blocked by `ON DELETE RESTRICT` once **any** application exists (→ 409). While a non-terminal application exists (DRAFT included), `LOCKED_FIELDS` (identity + state/district) → 409; address/lat/lng stay editable until step 5.
+  - Delete is blocked by `ON DELETE RESTRICT` once **any** application exists (→ 409).
+  - **Locking:** `core/instrument_lock.py: locked_fields(active_status)` is the single source of truth, used by both the PATCH check and `InstrumentOut.locked_fields` (so the frontend disables exactly what the backend enforces — never re-derive the rule client-side). While a non-terminal application exists (DRAFT included), identity fields (manufacturer, model, serial_number, capacity, capacity_unit, accuracy_class, state_code, district_code) → 409. Once the application reaches SCHEDULED, INSPECTION or APPROVED, address/latitude/longitude lock too (409, a distinct message) — they stay editable through DRAFT/SUBMITTED/DOCUMENT_REVIEW. The lock lifts entirely at REJECTED or CERTIFICATE_ISSUED.
   - `InstrumentOut.active_application` (one LEFT JOIN); reported as `null` to officials while it's a DRAFT.
 - `applications` (spec `docs/specs/03-applications.md`):
   - `application_number` = `APP-{UTC year}-{nextval('application_number_seq'):06d}`, display only.
@@ -128,7 +132,9 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
   - `state_code`/`district_code` are a snapshot of the instrument's location (locked while active).
   - `application_status_history` is append-only and feeds the timeline (businesses can't read `audit_logs`).
   - **Officials never see DRAFT applications or their documents** (`scope_applications`).
+  - `scheduled_date` on `ApplicationOut`/`ApplicationDetail.inspection` comes from a LEFT JOIN/`contains_eager` on `inspections`, never a per-row query.
 - `documents`: `storage_path` = `applications/{application_id}/{document_id}.{pdf|jpg|png}` (never a URL, never the user's filename). `content_type` is the **sniffed** type. Max 10 per application.
+- `inspections` (spec `docs/specs/05-officer-dashboard.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign only in step 5: always the officer who scheduled it; reassignment is a service-layer change later, not a migration). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` is reserved for step 6's "my inspections" list.
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
   - instrument `instrument_uid`: `LM-JH-DHN-000123`
@@ -146,6 +152,7 @@ DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
 
 - Enforce it through an `ALLOWED_TRANSITIONS` map in `services/applications.py`: `(from, to) → Edge(roles, enabled)`. Later steps flip `enabled`.
 - Enabled in step 3: DRAFT → SUBMITTED (BUSINESS, all required documents present), SUBMITTED → DOCUMENT_REVIEW (LM_OFFICER), DOCUMENT_REVIEW → REJECTED (LM_OFFICER, `note` 10–1000 chars).
+- Enabled in step 5: DOCUMENT_REVIEW → SCHEDULED (LM_OFFICER, requires `scheduled_date`; §"Scheduling" below).
 - `PATCH /applications/{id}/status` evaluation order: out of scope → 404; not an edge → 409 `Invalid status change`; wrong role → 403; not enabled → 409 `This action is not available yet`; edge rules → 409/422; apply (row lock, history row, audit row, one transaction).
 - `ApplicationDetail.allowed_actions` lists the enabled edges the caller's role may take (requirements not considered).
 - The status PATCH endpoint validates against that map and the caller's role. It never sets an arbitrary status.
@@ -153,6 +160,14 @@ DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
 - REJECTED is terminal. Re-verification means a new application.
 
 Certificate status: `VALID` · `EXPIRED` · `REVOKED`
+
+### Scheduling (step 5, spec `docs/specs/05-officer-dashboard.md`)
+- `today()` in `core/clock.py` is the current date in `APP_TIMEZONE` (default `Asia/Kolkata`, ASSUMPTION), built on a separate `now_utc()` so tests can freeze time via `monkeypatch.setattr(clock, "now_utc", ...)` — there's no freezegun dependency. A UTC-only check would reject valid IST dates for up to 5h30m around midnight.
+- `scheduled_date` on `StatusChange` is required for, and only allowed for, target `SCHEDULED`; must be between `today()` and `today() + SCHEDULING_MAX_DAYS_AHEAD` (default 180, a typo guard).
+- **Lock order when a transaction needs both:** application row, then instrument row. The scheduling transition locks the instrument with a **bare** `SELECT ... FOR UPDATE` (not `instruments_service.get()`): that function's query joinedloads `Instrument.active_application` — the very `Application` row just mutated — and `for_update`'s `populate_existing=True` would re-hydrate it from its still-stale (pre-commit) DB value, silently reverting the in-memory status change. Whenever you add a second lock inside a transition, re-check this interaction rather than assuming eager-loaded service helpers are safe to reuse for a lock-only call.
+- `PATCH /applications/{id}/inspection` (LM_OFFICER only, body `{scheduled_date}`) reschedules — only while SCHEDULED, same date is a no-op (no audit row), `assigned_officer_id` never changes.
+- Audit actions: `INSPECTION_SCHEDULED`, `INSPECTION_RESCHEDULED`.
+- `GET /applications` accepts `sort: "created_desc" | "scheduled_asc"` (422 on anything else); `scheduled_asc` needs an explicit `.outerjoin(Application.inspection)` + `contains_eager`, not `joinedload`, since ordering requires referencing that join directly.
 
 ## API
 
@@ -166,13 +181,15 @@ GET   /api/instruments/meta      # types, units, accuracy classes, regions (any 
 CRUD  /api/instruments           # write: BUSINESS (own org); read: + officials in jurisdiction; GATC 403
 CRUD  /api/applications          PATCH /api/applications/{id}/status
 POST  /api/documents             GET   /api/documents/{id}/url     # signed URL
-POST  /api/inspections           POST  /api/inspections/{id}/submit
+POST  /api/inspections           POST  /api/inspections/{id}/submit    # reserved for step 6
 GET   /api/certificates/{id}     GET   /api/certificates/{id}/pdf
 POST  /api/jobs/expiry-check     # requires X-Cron-Secret header
 GET   /api/public/verify/{certificate_number}                     # no auth
-GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits
+GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}
 CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
 GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 8 statuses zero-filled
+GET   /api/applications?sort=      # created_desc (default) | scheduled_asc
+PATCH /api/applications/{id}/inspection   # LM_OFFICER only; reschedule while SCHEDULED
 DELETE /api/documents/{id}         # BUSINESS, DRAFT only
 ```
 

@@ -63,7 +63,7 @@ PostGIS · Leaflet maps · pgvector/RAG · OCR · Celery/Redis · native mobile 
 2. Instrument registration ✅ (spec `docs/specs/02-instruments.md`)
 3. Application + document upload ✅ (spec `docs/specs/03-applications.md`)
 4. Business dashboard ✅ (spec `docs/specs/04-business-dashboard.md`)
-5. Officer dashboard
+5. Officer dashboard ✅ (spec `docs/specs/05-officer-dashboard.md`)
 6. Inspection checklist + measurements
 7. Approve/reject workflow
 8. Certificate PDF + QR

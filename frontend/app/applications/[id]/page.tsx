@@ -16,11 +16,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, uploadDocument } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { getApplicationMeta, labelFor } from "@/lib/meta";
+import { addDaysToIsoDate, todayInTimezone } from "@/lib/scheduling";
 import type { ApplicationDetail, ApplicationMeta, DocumentOut } from "@/lib/types";
 
 type State =
@@ -56,6 +58,19 @@ export default function ApplicationDetailPage() {
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState("");
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState("");
+  const [rescheduleDate, setRescheduleDate] = useState("");
+
+  useEffect(() => {
+    if (meta && !scheduleDate) setScheduleDate(todayInTimezone(meta.scheduling.timezone));
+  }, [meta, scheduleDate]);
+
+  useEffect(() => {
+    if (state.kind === "ready" && state.app.inspection && !rescheduleDate) {
+      setRescheduleDate(state.app.inspection.scheduled_date);
+    }
+  }, [state, rescheduleDate]);
 
   const load = useCallback(async () => {
     try {
@@ -86,9 +101,17 @@ export default function ApplicationDetailPage() {
   const isOwner = user?.role === "BUSINESS";
   const editable = isOwner && app.status === "DRAFT";
   const canSubmit = app.allowed_actions.includes("SUBMITTED");
+  const canSchedule = app.allowed_actions.includes("SCHEDULED");
   const requirementsMet = app.requirements.every((r) => !r.required || r.satisfied);
   const limits = meta?.limits;
   const atLimit = limits ? app.documents.length >= limits.max_documents : false;
+  // Always computed in the backend's scheduling timezone, never the browser's local date;
+  // the server validates independently regardless.
+  const minScheduleDate = meta ? todayInTimezone(meta.scheduling.timezone) : undefined;
+  const maxScheduleDate =
+    meta && minScheduleDate
+      ? addDaysToIsoDate(minScheduleDate, meta.scheduling.max_days_ahead)
+      : undefined;
 
   async function onFile(documentType: string, event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
@@ -162,18 +185,35 @@ export default function ApplicationDetailPage() {
     }
   }
 
-  async function changeStatus(status: string, note?: string) {
+  async function changeStatus(status: string, extra: Record<string, unknown> = {}) {
     setBusy(true);
     setActionError(null);
     try {
       const updated = await api<ApplicationDetail>(`/applications/${app.id}/status`, {
         method: "PATCH",
-        body: JSON.stringify(note ? { status, note } : { status }),
+        body: JSON.stringify({ status, ...extra }),
       });
       setState({ kind: "ready", app: updated });
       setConfirmSubmit(false);
       setRejectOpen(false);
       setRejectNote("");
+      setScheduleOpen(false);
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reschedule(newDate: string) {
+    setBusy(true);
+    setActionError(null);
+    try {
+      const updated = await api<ApplicationDetail>(`/applications/${app.id}/inspection`, {
+        method: "PATCH",
+        body: JSON.stringify({ scheduled_date: newDate }),
+      });
+      setState({ kind: "ready", app: updated });
     } catch (err) {
       setActionError(errorMessage(err));
     } finally {
@@ -230,10 +270,50 @@ export default function ApplicationDetailPage() {
               Reject
             </Button>
           ) : null}
+          {canSchedule ? (
+            <Button onClick={() => setScheduleOpen(true)} disabled={busy}>
+              Schedule inspection
+            </Button>
+          ) : null}
         </div>
       ) : null}
       {canSubmit && !requirementsMet ? (
         <p className="-mt-3 text-sm text-muted-foreground">Upload every required document to submit.</p>
+      ) : null}
+
+      {app.inspection ? (
+        <section className="grid gap-2 rounded-lg border p-4">
+          <p className="text-sm font-medium">
+            Scheduled for {new Date(app.inspection.scheduled_date).toLocaleDateString()}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Assigned to {app.inspection.assigned_officer_name}
+          </p>
+          {app.can_reschedule ? (
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="reschedule_date">Change date</Label>
+                <Input
+                  id="reschedule_date"
+                  type="date"
+                  className="w-auto"
+                  value={rescheduleDate}
+                  min={minScheduleDate}
+                  max={maxScheduleDate}
+                  onChange={(e) => setRescheduleDate(e.target.value)}
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void reschedule(rescheduleDate)}
+                disabled={busy || !rescheduleDate || rescheduleDate === app.inspection.scheduled_date}
+              >
+                {busy ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          ) : null}
+        </section>
       ) : null}
 
       <section className="grid gap-3">
@@ -375,10 +455,44 @@ export default function ApplicationDetailPage() {
             </Button>
             <Button
               variant="destructive"
-              onClick={() => void changeStatus("REJECTED", rejectNote.trim())}
+              onClick={() => void changeStatus("REJECTED", { note: rejectNote.trim() })}
               disabled={busy || rejectNote.trim().length < REJECT_MIN}
             >
               {busy ? "Rejecting…" : "Reject"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Schedule the inspection?</DialogTitle>
+            <DialogDescription>
+              The instrument&apos;s address and coordinates will be locked until the application is
+              completed or rejected.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor="schedule_date">Date</Label>
+            <Input
+              id="schedule_date"
+              type="date"
+              value={scheduleDate}
+              min={minScheduleDate}
+              max={maxScheduleDate}
+              onChange={(e) => setScheduleDate(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setScheduleOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void changeStatus("SCHEDULED", { scheduled_date: scheduleDate })}
+              disabled={busy || !scheduleDate}
+            >
+              {busy ? "Scheduling…" : "Schedule"}
             </Button>
           </DialogFooter>
         </DialogContent>

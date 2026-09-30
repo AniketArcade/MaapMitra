@@ -255,6 +255,16 @@ def make_application(make_user, make_instrument) -> Callable[..., Application]: 
                     StatusChange(status=S.REJECTED, note="Invoice is not legible"),
                     ip="test",
                 )
+            elif target == S.SCHEDULED:
+                from app.core import clock
+
+                app_service.transition(
+                    s,
+                    reviewer,
+                    application.id,
+                    StatusChange(status=S.SCHEDULED, scheduled_date=clock.today()),
+                    ip="test",
+                )
             elif target != S.DOCUMENT_REVIEW:
                 raise ValueError(f"factory can't reach {status}")
             return app_service.load(s, user, application.id)

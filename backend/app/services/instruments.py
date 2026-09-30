@@ -10,6 +10,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.application_types import ApplicationStatus
 from app.core.errors import Conflict, NotFound, Unprocessable
+from app.core.instrument_lock import IDENTITY_LOCKED, LOCATION_LOCK_MESSAGE, locked_fields
 from app.core.instrument_types import TYPE_LABELS, UNIT_FAMILY, CapacityUnit, InstrumentType
 from app.core.regions import is_valid_region, is_valid_state
 from app.models.instrument import MFR_SERIAL_INDEX, Instrument, instrument_uid_seq
@@ -18,20 +19,6 @@ from app.schemas.instrument import InstrumentCreate, InstrumentUpdate
 from app.services import audit
 from app.services.scoping import scope_instruments
 
-# Locked while the instrument has a non-terminal application (spec 03 §9).
-# address / latitude / longitude stay editable until step 5.
-LOCKED_FIELDS = frozenset(
-    {
-        "manufacturer",
-        "model",
-        "serial_number",
-        "capacity",
-        "capacity_unit",
-        "accuracy_class",
-        "state_code",
-        "district_code",
-    }
-)
 HAS_APPLICATIONS = "This instrument has applications and can't be deleted"
 
 DUPLICATE = (
@@ -212,10 +199,17 @@ def update(
         return instrument
 
     active = instrument.active_application
-    if active is not None and changes.keys() & LOCKED_FIELDS:
-        message = "This instrument has an application in progress; these details can't be changed."
-        if active.status == ApplicationStatus.DRAFT:
-            message += " Delete the draft to edit them."
+    locked = locked_fields(active.status if active is not None else None)
+    touched = changes.keys() & locked
+    if touched:
+        if touched & IDENTITY_LOCKED:
+            message = (
+                "This instrument has an application in progress; these details can't be changed."
+            )
+            if active is not None and active.status == ApplicationStatus.DRAFT:
+                message += " Delete the draft to edit them."
+        else:
+            message = LOCATION_LOCK_MESSAGE
         raise Conflict(message)
 
     merged = {

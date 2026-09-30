@@ -2,6 +2,7 @@
 from app.models.application import Application, ApplicationStatusHistory
 from app.models.audit_log import AuditLog
 from app.models.document import Document
+from app.models.inspection import Inspection
 from app.models.instrument import Instrument
 from app.models.organization import Organization
 from app.models.refresh_token import RefreshToken
@@ -12,6 +13,7 @@ __all__ = [
     "ApplicationStatusHistory",
     "AuditLog",
     "Document",
+    "Inspection",
     "Instrument",
     "Organization",
     "RefreshToken",

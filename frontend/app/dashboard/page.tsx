@@ -61,16 +61,18 @@ function InstrumentsSection({ instruments }: { instruments: Async<number> }) {
   );
 }
 
+type EmptyState = { message: string; cta?: { href: string; label: string } };
+
 // Total and per-status counts come from GET /applications/stats (server-side aggregate),
 // never from items.length: those numbers must stay correct no matter how many applications exist.
 function ApplicationsSummary({
   stats,
   meta,
-  instrumentTotal,
+  empty,
 }: {
   stats: Async<ApplicationStats>;
   meta: ApplicationMeta | null;
-  instrumentTotal: number | null;
+  empty: EmptyState;
 }) {
   if (stats.status === "loading") {
     return <p className="text-sm text-muted-foreground">Loading applications…</p>;
@@ -81,20 +83,17 @@ function ApplicationsSummary({
 
   const { total, by_status } = stats.data ?? { total: 0, by_status: {} };
   if (total === 0) {
-    const noInstruments = instrumentTotal === 0;
     return (
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-sm text-muted-foreground">
-          {noInstruments
-            ? "Register your first instrument to get started"
-            : "Start a verification application"}
-        </span>
-        <Link
-          href={noInstruments ? "/instruments/new" : "/applications/new"}
-          className={buttonVariants({ variant: "outline", size: "sm" })}
-        >
-          {noInstruments ? "Register instrument" : "New application"}
-        </Link>
+        <span className="text-sm text-muted-foreground">{empty.message}</span>
+        {empty.cta ? (
+          <Link
+            href={empty.cta.href}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            {empty.cta.label}
+          </Link>
+        ) : null}
       </div>
     );
   }
@@ -129,31 +128,91 @@ function ApplicationsSummary({
   );
 }
 
-function NeedsAttentionSection({ drafts }: { drafts: Async<Page<Application>> }) {
-  if (drafts.status === "loading") return null; // avoids a flash before the other sections settle
-  if (drafts.status === "error") {
-    return <RetryError message="Couldn't load items needing attention." onRetry={drafts.retry} />;
-  }
-  const { items, total } = drafts.data ?? { items: [], total: 0, page: 1, page_size: 5 };
-  if (total === 0) return null;
+type AttentionRule = { status: string; hint: string; data: Async<Page<Application>> };
+
+// One "Needs your attention" panel backed by several independent queries (one per rule) — each
+// rule keeps its own loading/error/retry, per spec 04 §4, but they render as a single list.
+function NeedsAttentionSection({ rules }: { rules: AttentionRule[] }) {
+  const errored = rules.filter((r) => r.data.status === "error");
+  const rows = rules.flatMap((r) =>
+    r.data.status === "ready"
+      ? (r.data.data?.items ?? []).map((a) => ({
+          id: a.id,
+          number: a.application_number,
+          uid: a.instrument.instrument_uid,
+          hint: r.hint,
+        }))
+      : [],
+  );
+  const more = rules
+    .filter((r) => r.data.status === "ready" && r.data.data && r.data.data.total > r.data.data.items.length)
+    .map((r) => ({
+      status: r.status,
+      count: (r.data.data?.total ?? 0) - (r.data.data?.items.length ?? 0),
+    }));
+
+  if (rows.length === 0 && errored.length === 0) return null;
   return (
     <div className="grid gap-2 rounded-lg border border-dashed p-4">
       <p className="text-sm font-medium">Needs your attention</p>
-      <ul className="grid gap-1">
+      {errored.map((r) => (
+        <RetryError
+          key={r.status}
+          message={`Couldn't load "${r.hint}" items.`}
+          onRetry={r.data.retry}
+        />
+      ))}
+      {rows.length > 0 ? (
+        <ul className="grid gap-1">
+          {rows.map((row) => (
+            <li key={row.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <Link href={`/applications/${row.id}`} className="underline">
+                {row.number} · {row.uid}
+              </Link>
+              <span className="text-muted-foreground">{row.hint}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {more.map((m) => (
+        <Link key={m.status} href={`/applications?status=${m.status}`} className="text-sm underline">
+          + {m.count} more
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function UpcomingInspectionsSection({ upcoming }: { upcoming: Async<Page<Application>> }) {
+  if (upcoming.status === "loading") return null; // avoids a flash before the other sections settle
+  if (upcoming.status === "error") {
+    return <RetryError message="Couldn't load upcoming inspections." onRetry={upcoming.retry} />;
+  }
+  const items = upcoming.data?.items ?? [];
+  if (items.length === 0) return null;
+  return (
+    <div className="grid gap-2">
+      <p className="text-sm font-medium">Upcoming inspections</p>
+      <ul className="grid gap-2">
         {items.map((a) => (
-          <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-            <Link href={`/applications/${a.id}`} className="underline">
-              {a.application_number} · {a.instrument.instrument_uid}
+          <li key={a.id}>
+            <Link
+              href={`/applications/${a.id}`}
+              className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm"
+            >
+              <span className="font-medium">
+                {a.scheduled_date ? new Date(a.scheduled_date).toLocaleDateString() : "—"}
+              </span>
+              <span>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {a.application_number}
+                </span>
+                <span className="ml-2">{a.instrument.instrument_uid}</span>
+              </span>
             </Link>
-            <span className="text-muted-foreground">Upload documents &amp; submit</span>
           </li>
         ))}
       </ul>
-      {total > items.length ? (
-        <Link href="/applications?status=DRAFT" className="text-sm underline">
-          + {total - items.length} more
-        </Link>
-      ) : null}
     </div>
   );
 }
@@ -189,13 +248,28 @@ function RecentSection({
                 </span>
                 <span className="ml-2">{a.instrument.instrument_uid}</span>
               </span>
-              <StatusBadge status={a.status} label={labelFor(meta?.statuses, a.status)} />
+              <span className="flex items-center gap-2">
+                {a.scheduled_date ? (
+                  <span className="text-xs text-muted-foreground">
+                    Scheduled: {new Date(a.scheduled_date).toLocaleDateString()}
+                  </span>
+                ) : null}
+                <StatusBadge status={a.status} label={labelFor(meta?.statuses, a.status)} />
+              </span>
             </Link>
           </li>
         ))}
       </ul>
     </div>
   );
+}
+
+function useApplicationMeta(): ApplicationMeta | null {
+  const [meta, setMeta] = useState<ApplicationMeta | null>(null);
+  useEffect(() => {
+    getApplicationMeta().then(setMeta, () => undefined);
+  }, []);
+  return meta;
 }
 
 function BusinessDashboard({ user }: { user: User }) {
@@ -205,10 +279,18 @@ function BusinessDashboard({ user }: { user: User }) {
   const stats = useAsync(() => getApplicationStats());
   const drafts = useAsync(() => api<Page<Application>>("/applications?status=DRAFT&page_size=5"));
   const recent = useAsync(() => api<Page<Application>>("/applications?page_size=5"));
-  const [meta, setMeta] = useState<ApplicationMeta | null>(null);
-  useEffect(() => {
-    getApplicationMeta().then(setMeta, () => undefined);
-  }, []);
+  const meta = useApplicationMeta();
+
+  const noInstruments = instruments.status === "ready" && instruments.data === 0;
+  const empty: EmptyState = noInstruments
+    ? {
+        message: "Register your first instrument to get started",
+        cta: { href: "/instruments/new", label: "Register instrument" },
+      }
+    : {
+        message: "Start a verification application",
+        cta: { href: "/applications/new", label: "New application" },
+      };
 
   return (
     <Card>
@@ -218,40 +300,58 @@ function BusinessDashboard({ user }: { user: User }) {
       </CardHeader>
       <CardContent className="grid gap-6">
         <InstrumentsSection instruments={instruments} />
-        <ApplicationsSummary
-          stats={stats}
-          meta={meta}
-          instrumentTotal={instruments.status === "ready" ? instruments.data : null}
+        <ApplicationsSummary stats={stats} meta={meta} empty={empty} />
+        <NeedsAttentionSection
+          rules={[{ status: "DRAFT", hint: "Upload documents & submit", data: drafts }]}
         />
-        <NeedsAttentionSection drafts={drafts} />
         <RecentSection recent={recent} meta={meta} />
       </CardContent>
     </Card>
   );
 }
 
-function useTotal(path: string): number | null {
-  const [total, setTotal] = useState<number | null>(null);
-  useEffect(() => {
-    api<Page<unknown>>(path).then(
-      (page) => setTotal(page.total),
-      () => setTotal(null),
-    );
-  }, [path]);
-  return total;
-}
+function OfficerDashboard({ user }: { user: User }) {
+  const instruments = useAsync(() =>
+    api<Page<Instrument>>("/instruments?page_size=1").then((p) => p.total),
+  );
+  const stats = useAsync(() => getApplicationStats());
+  const submitted = useAsync(() =>
+    api<Page<Application>>("/applications?status=SUBMITTED&page_size=5"),
+  );
+  const inReview = useAsync(() =>
+    api<Page<Application>>("/applications?status=DOCUMENT_REVIEW&page_size=5"),
+  );
+  const upcoming = useAsync(() =>
+    api<Page<Application>>("/applications?status=SCHEDULED&sort=scheduled_asc&page_size=5"),
+  );
+  const recent = useAsync(() => api<Page<Application>>("/applications?page_size=5"));
+  const meta = useApplicationMeta();
 
-function ReviewQueue() {
-  const total = useTotal("/applications?status=SUBMITTED&page_size=1");
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <span className="text-sm">
-        {total === null ? "Submitted, awaiting review" : `${total} submitted, awaiting review`}
-      </span>
-      <Link href="/applications?status=SUBMITTED" className={buttonVariants({ size: "sm" })}>
-        Review queue
-      </Link>
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>Officer dashboard</CardTitle>
+        <CardDescription>
+          Jurisdiction: {user.state_code} / {user.district_code}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-6">
+        <InstrumentsSection instruments={instruments} />
+        <ApplicationsSummary
+          stats={stats}
+          meta={meta}
+          empty={{ message: "No applications in your district yet" }}
+        />
+        <NeedsAttentionSection
+          rules={[
+            { status: "SUBMITTED", hint: "Start document review", data: submitted },
+            { status: "DOCUMENT_REVIEW", hint: "Schedule inspection", data: inReview },
+          ]}
+        />
+        <UpcomingInspectionsSection upcoming={upcoming} />
+        <RecentSection recent={recent} meta={meta} />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -273,23 +373,7 @@ function RoleCard({ user }: { user: User }) {
     return <BusinessDashboard user={user} />;
   }
   if (user.role === "LM_OFFICER") {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Officer dashboard</CardTitle>
-          <CardDescription>
-            Jurisdiction: {user.state_code} / {user.district_code}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          <ReviewQueue />
-          <p className="text-sm text-muted-foreground">Scheduled inspections will appear here.</p>
-          <div>
-            <JurisdictionLink />
-          </div>
-        </CardContent>
-      </Card>
-    );
+    return <OfficerDashboard user={user} />;
   }
   if (ADMIN_ROLES.includes(user.role)) {
     return (

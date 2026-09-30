@@ -58,6 +58,9 @@ class Application(UUIDPk, Timestamps, Base):
     history: Mapped[list["ApplicationStatusHistory"]] = relationship(
         lazy="raise", order_by="ApplicationStatusHistory.created_at", passive_deletes=True
     )
+    inspection: Mapped["Inspection | None"] = relationship(  # noqa: F821
+        lazy="raise", uselist=False, passive_deletes=True
+    )
 
     __table_args__ = (
         # One active (non-terminal) application per instrument. Race-free.

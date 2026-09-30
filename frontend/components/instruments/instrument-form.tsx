@@ -162,6 +162,10 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
     }
   }
 
+  // Never re-derive the lock rule client-side: disable exactly what the backend reports.
+  const locked = new Set(mode === "edit" ? initial.locked_fields : []);
+  const locationLocked = locked.has("address") || locked.has("latitude") || locked.has("longitude");
+
   if (metaError) {
     return (
       <Alert variant="destructive">
@@ -188,6 +192,16 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
         </Alert>
       ) : null}
 
+      {locked.size > 0 ? (
+        <Alert>
+          <AlertDescription>
+            {locationLocked
+              ? "An inspection is scheduled for this instrument; its address and coordinates can't be changed until the application is completed or rejected."
+              : "This instrument has an application in progress; these details can't be changed."}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <fieldset className="grid gap-4 sm:grid-cols-2">
         <legend className="mb-2 text-sm font-medium">Instrument</legend>
         <SelectField
@@ -205,6 +219,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           value={values.manufacturer}
           onChange={(e) => set("manufacturer", e.target.value)}
           required
+          disabled={locked.has("manufacturer")}
           error={fieldErrors.manufacturer}
         />
         <FormField
@@ -213,6 +228,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           value={values.model}
           onChange={(e) => set("model", e.target.value)}
           required
+          disabled={locked.has("model")}
           error={fieldErrors.model}
         />
         <FormField
@@ -223,6 +239,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           autoCapitalize="characters"
           hint="Letters, digits and - / . _ only."
           required
+          disabled={locked.has("serial_number")}
           error={fieldErrors.serial_number}
         />
         <FormField
@@ -232,6 +249,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           onChange={(e) => set("capacity", e.target.value)}
           inputMode="decimal"
           required
+          disabled={locked.has("capacity")}
           error={fieldErrors.capacity}
         />
         <SelectField
@@ -241,7 +259,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           options={unitOptions}
           onChange={(v) => set("capacity_unit", v)}
           placeholder={values.instrument_type ? "Select…" : "Choose a type first"}
-          disabled={!values.instrument_type}
+          disabled={!values.instrument_type || locked.has("capacity_unit")}
           error={fieldErrors.capacity_unit}
         />
         <SelectField
@@ -250,6 +268,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           value={values.accuracy_class || NO_CLASS}
           options={classOptions}
           onChange={(v) => set("accuracy_class", v === NO_CLASS ? "" : v)}
+          disabled={locked.has("accuracy_class")}
           error={fieldErrors.accuracy_class}
         />
       </fieldset>
@@ -263,6 +282,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
             value={values.address}
             onChange={(e) => set("address", e.target.value)}
             required
+            disabled={locked.has("address")}
             error={fieldErrors.address}
           />
         </div>
@@ -272,6 +292,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           value={values.state_code}
           options={stateOptions}
           onChange={(v) => set("state_code", v)}
+          disabled={locked.has("state_code")}
           error={fieldErrors.state_code}
         />
         <SelectField
@@ -280,7 +301,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           value={values.district_code}
           options={districtOptions}
           onChange={(v) => set("district_code", v)}
-          disabled={!values.state_code}
+          disabled={!values.state_code || locked.has("district_code")}
           error={fieldErrors.district_code}
         />
         <FormField
@@ -290,6 +311,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           onChange={(e) => set("latitude", e.target.value)}
           inputMode="decimal"
           placeholder="23.7957"
+          disabled={locked.has("latitude")}
           error={fieldErrors.latitude}
         />
         <FormField
@@ -299,6 +321,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           onChange={(e) => set("longitude", e.target.value)}
           inputMode="decimal"
           placeholder="86.4304"
+          disabled={locked.has("longitude")}
           error={fieldErrors.longitude}
         />
       </fieldset>
