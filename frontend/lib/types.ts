@@ -67,6 +67,10 @@ export type Instrument = {
   // backend/app/schemas/instrument.py's category_pair_valid).
   category_id: number | null;
   category_values: Record<string, unknown> | null;
+  // Spec 14: "Can the instrument be transported?" true -> Office/test centre verification,
+  // false -> On-site (in-situ). Snapshotted onto Application.verification_mode at application
+  // creation time (see verification_mode below) and never re-derived after that.
+  transportable: boolean;
   address: string;
   state_code: string;
   district_code: string;
@@ -163,6 +167,10 @@ export type Application = {
   organization_name: string;
   state_code: string;
   district_code: string;
+  // Spec 14: raw enum ("OFFICE_TEST_CENTRE" | "ON_SITE"), snapshotted from the instrument's
+  // transportable at application creation. Null for applications created before this feature
+  // shipped. Labels come from ApplicationMeta.verification_modes — never hardcode them.
+  verification_mode: string | null;
   business_notes: string | null;
   submitted_at: string | null;
   scheduled_date: string | null;
@@ -183,6 +191,10 @@ export type Inspection = {
   id: string;
   scheduled_date: string;
   assigned_officer_name: string;
+  // Spec 15: which of the two assignable roles actually performed this assignment. Raw enum
+  // ("LM_OFFICER" | "GATC") — a small, self-evident, model-owned enum with no meta-exposed label
+  // dict (mirrors ChecklistResult's own precedent), so display labels are fine to compute inline.
+  assignee_role: string;
   submitted_at: string | null;
   checklist_summary: { passed: number; failed: number; na: number } | null;
 };
@@ -204,6 +216,13 @@ export type Certificate = {
   capacity_unit: string;
   organization_name: string;
   qr_code_data_uri: string;
+  // Spec 13: self-referential supersede chain (raw ids; resolve via GET /certificates/{id} when
+  // needed, matching this schema's existing flat-id convention) and a computed "expiring within
+  // the reminder window" flag. supersedes_certificate_id/superseded_by_certificate_id are null
+  // for a certificate that hasn't superseded, or been superseded by, another one.
+  supersedes_certificate_id: string | null;
+  superseded_by_certificate_id: string | null;
+  is_expiring_soon: boolean;
 };
 
 export type VerifyResult = {
@@ -224,6 +243,21 @@ export type AdminCertificateStats = {
   revoked: number;
 };
 
+// Spec 12: nested on ApplicationDetail.payment only — null until POST .../mock-pay is first
+// called (the row is created lazily), informational only, never gates any transition.
+export type Payment = {
+  status: string; // NOT_PAID | PENDING | PAID — label via ApplicationMeta.payment_statuses
+  amount: string | null;
+  paid_at: string | null;
+};
+
+// Spec 11: one row of the document-review checklist snapshot, in template order.
+export type ReviewChecklistItem = {
+  item_key: string;
+  label: string;
+  checked: boolean;
+};
+
 export type ApplicationDetail = Application & {
   documents: DocumentOut[];
   history: {
@@ -237,7 +271,26 @@ export type ApplicationDetail = Application & {
   allowed_actions: string[];
   inspection: Inspection | null;
   certificate: Certificate | null;
+  payment: Payment | null;
   can_reschedule: boolean;
+  review_checklist: ReviewChecklistItem[];
+};
+
+// Spec 15: one GATC organization eligible for a given instrument category (GET
+// /gatc/eligible?category_id=), for the scheduling officer's allocation dropdown.
+export type GatcEligibleOrg = {
+  id: string;
+  name: string;
+  state_code: string;
+  district_code: string;
+};
+
+// Spec 15: one GATC-role user of an organization (GET /gatc/{organization_id}/users), for
+// picking the specific person to assign alongside the organization.
+export type GatcOrgUser = {
+  id: string;
+  full_name: string;
+  email: string;
 };
 
 export type ApplicationStats = { total: number; by_status: Record<string, number> };
@@ -250,6 +303,12 @@ export type ApplicationMeta = {
   document_types: LabelledValue[];
   limits: { max_file_bytes: number; max_documents: number; allowed_content_types: string[] };
   scheduling: { timezone: string; max_days_ahead: number };
+  // Spec 11: the document-review checklist template — never hardcode item keys/labels client-side.
+  document_review_checklist: { key: string; label: string }[];
+  // Spec 14: display labels for Application.verification_mode ("OFFICE_TEST_CENTRE" | "ON_SITE").
+  verification_modes: LabelledValue[];
+  // Spec 12: display labels for Payment.status ("NOT_PAID" | "PENDING" | "PAID").
+  payment_statuses: LabelledValue[];
 };
 
 // Checklist/measurement results and templates are backend-owned (GET /inspections/meta).

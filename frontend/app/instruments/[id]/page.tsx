@@ -103,6 +103,10 @@ export default function InstrumentDetailPage() {
         <Row label="Serial number" value={i.serial_number} />
         <Row label="Maximum capacity" value={`${i.capacity} ${i.capacity_unit}`} />
         <Row label="Accuracy class" value={i.accuracy_class ? `Class ${i.accuracy_class}` : "Not specified"} />
+        <Row
+          label="Can be transported?"
+          value={i.transportable ? "Yes (office/test centre)" : "No (on-site/in-situ)"}
+        />
         <Row label="Address" value={i.address} />
         <Row label="Region" value={regionLabel(meta, i.state_code, i.district_code)} />
         <Row

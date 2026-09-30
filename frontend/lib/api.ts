@@ -4,6 +4,8 @@ import type {
   ApplicationStats,
   AuthResponse,
   Certificate,
+  GatcEligibleOrg,
+  GatcOrgUser,
   InspectionDetail,
   VerifyResult,
 } from "@/lib/types";
@@ -162,4 +164,15 @@ export function getPublicVerify(certificateNumber: string): Promise<VerifyResult
 
 export function submitInspection(id: string): Promise<InspectionDetail> {
   return api<InspectionDetail>(`/inspections/${id}/submit`, { method: "POST" });
+}
+
+// Spec 15: GATC organizations eligible for a category, for the scheduling officer's allocation
+// dropdown (LM_OFFICER only at the backend). Not cached: it's queried live against a specific
+// category_id chosen at schedule time, not a fixed reference list like getInstrumentMeta().
+export function getGatcEligible(categoryId: number): Promise<GatcEligibleOrg[]> {
+  return api<GatcEligibleOrg[]>(`/gatc/eligible?category_id=${categoryId}`);
+}
+
+export function getGatcOrgUsers(organizationId: string): Promise<GatcOrgUser[]> {
+  return api<GatcOrgUser[]>(`/gatc/${organizationId}/users`);
 }

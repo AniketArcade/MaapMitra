@@ -6,8 +6,10 @@ import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 
 import { StatusBadge } from "@/components/applications/status-badge";
 import { NO_ACCESS, StateMessage } from "@/components/instruments/state-message";
+import { SelectField } from "@/components/select-field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -19,11 +21,18 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ApiError, api, uploadDocument } from "@/lib/api";
+import { ApiError, api, getGatcEligible, getGatcOrgUsers, uploadDocument } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { getApplicationMeta, labelFor } from "@/lib/meta";
 import { addDaysToIsoDate, todayInTimezone } from "@/lib/scheduling";
-import type { ApplicationDetail, ApplicationMeta, DocumentOut } from "@/lib/types";
+import type {
+  ApplicationDetail,
+  ApplicationMeta,
+  DocumentOut,
+  GatcEligibleOrg,
+  GatcOrgUser,
+  Instrument,
+} from "@/lib/types";
 
 type State =
   | { kind: "loading" }
@@ -33,6 +42,10 @@ type State =
   | { kind: "ready"; app: ApplicationDetail };
 
 const REJECT_MIN = 10;
+// Step 11: mirrors the backend's DEFICIENCY_NOTE_MIN — a sibling constant, kept separate from
+// REJECT_MIN so the two can diverge later without an unrelated rename (same reasoning the
+// backend's own services/applications.py documents for itself).
+const DEFICIENCY_MIN = 10;
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -44,6 +57,13 @@ function errorMessage(err: unknown): string {
   if (!(err instanceof ApiError)) return "Could not reach the server.";
   const fieldMessage = Object.values(err.fieldErrors)[0];
   return fieldMessage ?? err.message;
+}
+
+// Spec 15: InspectionAssigneeRole is a small, self-evident, model-owned enum with no meta-exposed
+// label dict (same precedent ChecklistResult already sets) — display labels are fine to compute
+// inline here, unlike status/application_type/document_type, which always go through meta.
+function assigneeRoleLabel(role: string): string {
+  return role === "GATC" ? "GATC (test centre)" : "LM Officer";
 }
 
 export default function ApplicationDetailPage() {
@@ -61,9 +81,24 @@ export default function ApplicationDetailPage() {
   const [rejectNote, setRejectNote] = useState("");
   const [approveOpen, setApproveOpen] = useState(false);
   const [approveNote, setApproveNote] = useState("");
+  const [deficientOpen, setDeficientOpen] = useState(false);
+  const [deficientNote, setDeficientNote] = useState("");
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleDate, setScheduleDate] = useState("");
   const [rescheduleDate, setRescheduleDate] = useState("");
+  const [reviewBusy, setReviewBusy] = useState<string | null>(null);
+  const [payBusy, setPayBusy] = useState(false);
+
+  // Spec 15: GATC routing choice, populated only while scheduling an OFFICE_TEST_CENTRE,
+  // category-tagged application. `gatcEligible === null` means "not checked yet, or not
+  // applicable" — an ON_SITE application (or one whose instrument has no category_id) never
+  // triggers the extra fetches below, so its self-assign-only flow stays completely unchanged.
+  const [gatcEligible, setGatcEligible] = useState<GatcEligibleOrg[] | null>(null);
+  const [gatcLoading, setGatcLoading] = useState(false);
+  const [gatcMode, setGatcMode] = useState<"self" | "gatc">("self");
+  const [gatcOrgId, setGatcOrgId] = useState("");
+  const [gatcUsers, setGatcUsers] = useState<GatcOrgUser[] | null>(null);
+  const [gatcUserId, setGatcUserId] = useState("");
 
   useEffect(() => {
     if (meta && !scheduleDate) setScheduleDate(todayInTimezone(meta.scheduling.timezone));
@@ -112,6 +147,14 @@ export default function ApplicationDetailPage() {
   // documented exception to "buttons come only from allowed_actions" (frontend/CLAUDE.md).
   const canIssueCertificate = app.status === "APPROVED" && isOfficer;
   const requirementsMet = app.requirements.every((r) => !r.required || r.satisfied);
+  // Step 11: the backend is the source of truth (DOCUMENT_REVIEW -> SCHEDULED 409s with the
+  // unchecked items' labels if this isn't true) — this only disables the button with a helpful
+  // hint once the gate is already known, exactly like requirementsMet does for Submit above.
+  const reviewChecklistComplete = app.review_checklist.every((i) => i.checked);
+  const deficiencyNote =
+    app.status === "DOCUMENTS_DEFICIENT"
+      ? ([...app.history].reverse().find((h) => h.to_status === "DOCUMENTS_DEFICIENT")?.note ?? null)
+      : null;
   const limits = meta?.limits;
   const atLimit = limits ? app.documents.length >= limits.max_documents : false;
   // Always computed in the backend's scheduling timezone, never the browser's local date;
@@ -208,6 +251,8 @@ export default function ApplicationDetailPage() {
       setRejectNote("");
       setApproveOpen(false);
       setApproveNote("");
+      setDeficientOpen(false);
+      setDeficientNote("");
       setScheduleOpen(false);
     } catch (err) {
       setActionError(errorMessage(err));
@@ -264,6 +309,80 @@ export default function ApplicationDetailPage() {
     }
   }
 
+  // Step 11: each checkbox fires its own single-item PATCH (the endpoint's `items` array accepts
+  // a partial batch, but a per-toggle call keeps each checkbox's own pending/error state simple
+  // and matches this page's existing one-action-one-request pattern, e.g. onDeleteDocument).
+  async function toggleReviewItem(itemKey: string, checked: boolean) {
+    setReviewBusy(itemKey);
+    setActionError(null);
+    try {
+      const updated = await api<ApplicationDetail>(`/applications/${app.id}/review-checklist`, {
+        method: "PATCH",
+        body: JSON.stringify({ items: [{ item_key: itemKey, checked }] }),
+      });
+      setState({ kind: "ready", app: updated });
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setReviewBusy(null);
+    }
+  }
+
+  // Spec 12: purely informational — never implies this gates any other step.
+  async function onMockPay() {
+    setPayBusy(true);
+    setActionError(null);
+    try {
+      const updated = await api<ApplicationDetail>(`/applications/${app.id}/mock-pay`, {
+        method: "POST",
+      });
+      setState({ kind: "ready", app: updated });
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setPayBusy(false);
+    }
+  }
+
+  // Spec 15: opening the Schedule dialog decides whether to offer GATC routing at all. Only an
+  // OFFICE_TEST_CENTRE application with a category-tagged instrument ever triggers the extra
+  // fetches; an ON_SITE application (or one with no category_id) leaves gatcEligible `null` and
+  // the dialog renders exactly as it did before this step.
+  async function openSchedule() {
+    setScheduleOpen(true);
+    setGatcMode("self");
+    setGatcEligible(null);
+    setGatcOrgId("");
+    setGatcUsers(null);
+    setGatcUserId("");
+    if (app.verification_mode !== "OFFICE_TEST_CENTRE") return;
+    setGatcLoading(true);
+    try {
+      const instrument = await api<Instrument>(`/instruments/${app.instrument.id}`);
+      if (instrument.category_id !== null) {
+        setGatcEligible(await getGatcEligible(instrument.category_id));
+      } else {
+        setGatcEligible([]); // checked, but no category to route on -> self-assign only
+      }
+    } catch {
+      setGatcEligible([]); // fail closed: self-assign always still works
+    } finally {
+      setGatcLoading(false);
+    }
+  }
+
+  async function onSelectGatcOrg(orgId: string) {
+    setGatcOrgId(orgId);
+    setGatcUserId("");
+    setGatcUsers(null);
+    if (!orgId) return;
+    try {
+      setGatcUsers(await getGatcOrgUsers(orgId));
+    } catch {
+      setGatcUsers([]);
+    }
+  }
+
   const documentsByType = (type: string) => app.documents.filter((d) => d.document_type === type);
   const shownTypes = editable
     ? app.requirements
@@ -285,6 +404,11 @@ export default function ApplicationDetailPage() {
             {app.instrument.capacity} {app.instrument.capacity_unit}
             {!isOwner ? ` · ${app.organization_name}` : ""}
           </p>
+          {app.verification_mode ? (
+            <p className="text-sm text-muted-foreground">
+              Verification mode: {labelFor(meta?.verification_modes, app.verification_mode)}
+            </p>
+          ) : null}
         </div>
         <StatusBadge status={app.status} label={labelFor(meta?.statuses, app.status)} />
       </div>
@@ -295,13 +419,22 @@ export default function ApplicationDetailPage() {
         </Alert>
       ) : null}
 
+      {deficiencyNote ? (
+        <Alert>
+          <AlertDescription>
+            <span className="font-medium">Documents deficient — </span>
+            {deficiencyNote}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {/* Actions come from allowed_actions: the UI never guesses permissions.
           Exception: Issue certificate (canIssueCertificate), see its definition above. */}
       {app.allowed_actions.length > 0 || canIssueCertificate ? (
         <div className="flex flex-wrap gap-2">
           {canSubmit ? (
             <Button onClick={() => setConfirmSubmit(true)} disabled={!requirementsMet || busy}>
-              Submit application
+              {app.status === "DOCUMENTS_DEFICIENT" ? "Resubmit application" : "Submit application"}
             </Button>
           ) : null}
           {app.allowed_actions.includes("DOCUMENT_REVIEW") ? (
@@ -314,13 +447,22 @@ export default function ApplicationDetailPage() {
               Approve
             </Button>
           ) : null}
+          {app.allowed_actions.includes("DOCUMENTS_DEFICIENT") ? (
+            <Button variant="outline" onClick={() => setDeficientOpen(true)} disabled={busy}>
+              Send back (documents deficient)
+            </Button>
+          ) : null}
           {app.allowed_actions.includes("REJECTED") ? (
             <Button variant="destructive" onClick={() => setRejectOpen(true)} disabled={busy}>
               Reject
             </Button>
           ) : null}
           {canSchedule ? (
-            <Button onClick={() => setScheduleOpen(true)} disabled={busy}>
+            <Button
+              onClick={() => void openSchedule()}
+              disabled={busy || !reviewChecklistComplete}
+              title={!reviewChecklistComplete ? "Complete the document review checklist first" : undefined}
+            >
               Schedule inspection
             </Button>
           ) : null}
@@ -339,6 +481,46 @@ export default function ApplicationDetailPage() {
       {canSubmit && !requirementsMet ? (
         <p className="-mt-3 text-sm text-muted-foreground">Upload every required document to submit.</p>
       ) : null}
+      {canSchedule && !reviewChecklistComplete ? (
+        <p className="-mt-3 text-sm text-muted-foreground">
+          Check off every document review item before scheduling.
+        </p>
+      ) : null}
+
+      {app.review_checklist.length > 0 ? (
+        <section className="grid gap-3 rounded-lg border p-4">
+          <h2 className="text-lg font-medium">Document review checklist</h2>
+          {app.status === "DOCUMENT_REVIEW" && isOfficer ? (
+            <ul className="grid gap-2">
+              {app.review_checklist.map((item) => (
+                <li key={item.item_key}>
+                  <Label
+                    htmlFor={`review_${item.item_key}`}
+                    className="flex min-h-9 items-start gap-2 font-normal"
+                  >
+                    <Checkbox
+                      id={`review_${item.item_key}`}
+                      checked={item.checked}
+                      disabled={reviewBusy !== null}
+                      onCheckedChange={(next) => void toggleReviewItem(item.item_key, next === true)}
+                    />
+                    <span>{item.label}</span>
+                  </Label>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            // Read-only display for BUSINESS/other viewers, or once past DOCUMENT_REVIEW.
+            <ul className="grid gap-1 text-sm">
+              {app.review_checklist.map((item) => (
+                <li key={item.item_key}>
+                  {item.checked ? "✓" : "•"} {item.label}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
 
       {app.inspection ? (
         <section className="grid gap-2 rounded-lg border p-4">
@@ -346,7 +528,8 @@ export default function ApplicationDetailPage() {
             Scheduled for {new Date(app.inspection.scheduled_date).toLocaleDateString()}
           </p>
           <p className="text-sm text-muted-foreground">
-            Assigned to {app.inspection.assigned_officer_name}
+            Assigned to {app.inspection.assigned_officer_name} (
+            {assigneeRoleLabel(app.inspection.assignee_role)})
           </p>
           {app.inspection.submitted_at && app.inspection.checklist_summary ? (
             <p className="text-sm text-muted-foreground">
@@ -399,6 +582,19 @@ export default function ApplicationDetailPage() {
             Valid {new Date(app.certificate.valid_from).toLocaleDateString()} –{" "}
             {new Date(app.certificate.valid_until).toLocaleDateString()}
           </p>
+          {app.certificate.is_expiring_soon ? (
+            <p className="text-sm font-medium text-amber-600 dark:text-amber-500">
+              Expiring soon — a re-verification may be needed shortly.
+            </p>
+          ) : null}
+          {app.certificate.superseded_by_certificate_id ? (
+            <p className="text-sm text-muted-foreground">
+              This certificate has been superseded by a newer one.
+            </p>
+          ) : null}
+          {app.certificate.supersedes_certificate_id ? (
+            <p className="text-sm text-muted-foreground">Supersedes an earlier certificate.</p>
+          ) : null}
           <Link href={`/certificates/${app.certificate.id}`} className="w-fit">
             <Button variant="outline" size="sm">
               View certificate
@@ -406,6 +602,29 @@ export default function ApplicationDetailPage() {
           </Link>
         </section>
       ) : null}
+
+      <section className="grid gap-2 rounded-lg border p-4">
+        <h2 className="text-sm font-medium">Payment</h2>
+        <p className="text-sm text-muted-foreground">
+          {labelFor(meta?.payment_statuses, app.payment?.status ?? "NOT_PAID")}
+          {app.payment?.paid_at ? ` · ${new Date(app.payment.paid_at).toLocaleDateString()}` : ""}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Informational only (prototype) — payment status doesn&apos;t affect any other step of this
+          application.
+        </p>
+        {isOwner && (!app.payment || app.payment.status !== "PAID") ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-fit"
+            onClick={() => void onMockPay()}
+            disabled={payBusy}
+          >
+            {payBusy ? "Processing…" : "Mock pay (prototype)"}
+          </Button>
+        ) : null}
+      </section>
 
       <section className="grid gap-3">
         <h2 className="text-lg font-medium">Documents</h2>
@@ -505,7 +724,9 @@ export default function ApplicationDetailPage() {
       <Dialog open={confirmSubmit} onOpenChange={setConfirmSubmit}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Submit this application?</DialogTitle>
+            <DialogTitle>
+              {app.status === "DOCUMENTS_DEFICIENT" ? "Resubmit this application?" : "Submit this application?"}
+            </DialogTitle>
             <DialogDescription>
               After submitting you can&apos;t add or remove documents, and the instrument&apos;s details stay
               locked until the application is decided.
@@ -588,6 +809,38 @@ export default function ApplicationDetailPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={deficientOpen} onOpenChange={setDeficientOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send back as documents deficient?</DialogTitle>
+            <DialogDescription>
+              This doesn&apos;t reject the application — the business can fix the issue and resubmit.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor="deficient_note">What&apos;s missing or wrong</Label>
+            <Textarea
+              id="deficient_note"
+              value={deficientNote}
+              maxLength={1000}
+              onChange={(e) => setDeficientNote(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">At least {DEFICIENCY_MIN} characters.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeficientOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void changeStatus("DOCUMENTS_DEFICIENT", { note: deficientNote.trim() })}
+              disabled={busy || deficientNote.trim().length < DEFICIENCY_MIN}
+            >
+              {busy ? "Sending…" : "Send back"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
         <DialogContent>
           <DialogHeader>
@@ -608,13 +861,84 @@ export default function ApplicationDetailPage() {
               onChange={(e) => setScheduleDate(e.target.value)}
             />
           </div>
+
+          {/* Spec 15: GATC routing. Only ever shown for an OFFICE_TEST_CENTRE, category-tagged
+              application with at least one eligible GATC organization — an ON_SITE application
+              (or one with no category_id) renders none of this, self-assign-only, unchanged. */}
+          {gatcLoading ? (
+            <p className="text-sm text-muted-foreground">Checking for eligible GATC test centres…</p>
+          ) : gatcEligible && gatcEligible.length > 0 ? (
+            <div className="grid gap-3">
+              <div className="grid gap-1.5">
+                <Label>Assign to</Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={gatcMode === "self" ? "default" : "outline"}
+                    onClick={() => setGatcMode("self")}
+                  >
+                    Myself (self-assign)
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={gatcMode === "gatc" ? "default" : "outline"}
+                    onClick={() => setGatcMode("gatc")}
+                  >
+                    Route to a GATC test centre
+                  </Button>
+                </div>
+              </div>
+              {gatcMode === "gatc" ? (
+                <>
+                  <SelectField
+                    name="gatc_org"
+                    label="GATC test centre"
+                    value={gatcOrgId}
+                    options={gatcEligible.map((o) => ({
+                      value: o.id,
+                      label: `${o.name} (${o.district_code}, ${o.state_code})`,
+                    }))}
+                    onChange={(v) => void onSelectGatcOrg(v)}
+                  />
+                  {gatcOrgId ? (
+                    <SelectField
+                      name="gatc_user"
+                      label="Staff member"
+                      value={gatcUserId}
+                      options={(gatcUsers ?? []).map((u) => ({
+                        value: u.id,
+                        label: `${u.full_name} (${u.email})`,
+                      }))}
+                      onChange={setGatcUserId}
+                      placeholder={gatcUsers === null ? "Loading…" : "Select…"}
+                    />
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : gatcEligible !== null ? (
+            <p className="text-sm text-muted-foreground">
+              No eligible GATC test centre is configured for this instrument&apos;s category — this
+              inspection will be self-assigned.
+            </p>
+          ) : null}
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setScheduleOpen(false)} disabled={busy}>
               Cancel
             </Button>
             <Button
-              onClick={() => void changeStatus("SCHEDULED", { scheduled_date: scheduleDate })}
-              disabled={busy || !scheduleDate}
+              onClick={() =>
+                void changeStatus("SCHEDULED", {
+                  scheduled_date: scheduleDate,
+                  ...(gatcMode === "gatc" && gatcOrgId && gatcUserId
+                    ? { gatc_organization_id: gatcOrgId, gatc_user_id: gatcUserId }
+                    : {}),
+                })
+              }
+              disabled={busy || !scheduleDate || (gatcMode === "gatc" && (!gatcOrgId || !gatcUserId))}
             >
               {busy ? "Scheduling…" : "Schedule"}
             </Button>

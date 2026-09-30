@@ -6,6 +6,8 @@ import { FormField } from "@/components/auth/form-field";
 import { SelectField } from "@/components/select-field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { CategoryPicker } from "@/components/instruments/category-picker";
 import {
   DynamicFieldRenderer,
@@ -25,6 +27,7 @@ type Values = {
   capacity: string;
   capacity_unit: string;
   accuracy_class: string;
+  transportable: boolean;
   address: string;
   state_code: string;
   district_code: string;
@@ -43,6 +46,7 @@ function toValues(i: Instrument): Values {
     capacity: String(i.capacity),
     capacity_unit: i.capacity_unit,
     accuracy_class: i.accuracy_class ?? "",
+    transportable: i.transportable,
     address: i.address,
     state_code: i.state_code,
     district_code: i.district_code,
@@ -52,7 +56,7 @@ function toValues(i: Instrument): Values {
 }
 
 // Decimals go over the wire as strings so the backend's Decimal parsing is exact.
-function payload(v: Values): Record<string, string | null> {
+function payload(v: Values): Record<string, string | boolean | null> {
   const nullable = (s: string) => (s.trim() === "" ? null : s.trim());
   return {
     instrument_type: v.instrument_type,
@@ -62,6 +66,10 @@ function payload(v: Values): Record<string, string | null> {
     capacity: v.capacity.trim(),
     capacity_unit: v.capacity_unit,
     accuracy_class: nullable(v.accuracy_class),
+    // Spec 14: "Can the instrument be transported?" — never null (InstrumentUpdate rejects an
+    // explicit null for it, same as every other non-nullable field); always included so edit-mode
+    // diffing (below) can detect a change like any other boolean-vs-boolean comparison.
+    transportable: v.transportable,
     address: v.address,
     state_code: v.state_code,
     district_code: v.district_code,
@@ -89,6 +97,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           capacity: "",
           capacity_unit: "",
           accuracy_class: "",
+          transportable: true,
           address: "",
           state_code: user?.state_code ?? "",
           district_code: user?.district_code ?? "",
@@ -329,6 +338,24 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           disabled={locked.has("accuracy_class")}
           error={fieldErrors.accuracy_class}
         />
+        <div className="flex flex-col justify-end gap-1.5 sm:col-span-2">
+          <Label htmlFor="transportable" className="flex min-h-9 items-center gap-2 font-normal">
+            <Checkbox
+              id="transportable"
+              checked={values.transportable}
+              disabled={locked.has("transportable")}
+              onCheckedChange={(next) => set("transportable", next === true)}
+            />
+            Can the instrument be transported?
+          </Label>
+          <p className="text-sm text-muted-foreground">
+            Yes routes verification to an office/test centre; no means it is verified on-site
+            (in-situ) where it stands. Applies to any application filed from this instrument.
+          </p>
+          {fieldErrors.transportable ? (
+            <p className="text-sm text-destructive">{fieldErrors.transportable}</p>
+          ) : null}
+        </div>
       </fieldset>
 
       <fieldset className="grid gap-4">
