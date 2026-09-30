@@ -22,6 +22,7 @@ from app.core.instrument_types import CapacityUnit, InstrumentType
 from app.core.roles import Role
 from app.models.application import Application
 from app.models.user import User
+from app.schemas.certificate import CertificateOut
 from app.schemas.common import StrictModel
 from app.schemas.document import DocumentOut
 
@@ -149,6 +150,7 @@ class ApplicationDetail(ApplicationOut):
     requirements: list[RequirementOut]
     allowed_actions: list[ApplicationStatus]
     inspection: InspectionOut | None
+    certificate: CertificateOut | None
     can_reschedule: bool
 
     @classmethod
@@ -204,6 +206,7 @@ class ApplicationDetail(ApplicationOut):
                 if a.inspection
                 else None
             ),
+            certificate=CertificateOut.from_model(a.certificate) if a.certificate else None,
             # Scope already implies jurisdiction: reaching this point means the caller may read it.
             can_reschedule=(
                 a.status == ApplicationStatus.SCHEDULED and user.role == Role.LM_OFFICER

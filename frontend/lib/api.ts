@@ -1,5 +1,12 @@
 // Single typed API client. Client-side only: it calls the same-origin /api/* rewrite.
-import type { ApplicationStats, AuthResponse, InspectionDetail } from "@/lib/types";
+import type {
+  AdminCertificateStats,
+  ApplicationStats,
+  AuthResponse,
+  Certificate,
+  InspectionDetail,
+  VerifyResult,
+} from "@/lib/types";
 
 type ValidationIssue = { loc: (string | number)[]; msg: string };
 
@@ -123,6 +130,10 @@ export function getApplicationStats(): Promise<ApplicationStats> {
   return api<ApplicationStats>("/applications/stats");
 }
 
+export function getAdminCertificateStats(): Promise<AdminCertificateStats> {
+  return api<AdminCertificateStats>("/admin/certificates/stats");
+}
+
 export function getInspection(id: string): Promise<InspectionDetail> {
   return api<InspectionDetail>(`/inspections/${id}`);
 }
@@ -138,6 +149,15 @@ export function patchInspection(id: string, body: InspectionUpdate): Promise<Ins
     method: "PATCH",
     body: JSON.stringify(body),
   });
+}
+
+export function getCertificate(id: string): Promise<Certificate> {
+  return api<Certificate>(`/certificates/${id}`);
+}
+
+// No auth: the backend endpoint can never 401, so this needs no special-casing.
+export function getPublicVerify(certificateNumber: string): Promise<VerifyResult> {
+  return api<VerifyResult>(`/public/verify/${certificateNumber}`);
 }
 
 export function submitInspection(id: string): Promise<InspectionDetail> {

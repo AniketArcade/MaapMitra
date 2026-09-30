@@ -135,6 +135,43 @@ export type Inspection = {
   checklist_summary: { passed: number; failed: number; na: number } | null;
 };
 
+export type Certificate = {
+  id: string;
+  application_id: string;
+  certificate_number: string;
+  status: string;
+  valid_from: string;
+  valid_until: string;
+  issued_at: string;
+  instrument_uid: string;
+  instrument_type: string;
+  manufacturer: string;
+  model: string;
+  serial_number: string;
+  capacity: number;
+  capacity_unit: string;
+  organization_name: string;
+  qr_code_data_uri: string;
+};
+
+export type VerifyResult = {
+  certificate_number: string;
+  status: string;
+  instrument_type_label: string;
+  manufacturer: string;
+  model: string;
+  serial_number: string;
+  valid_from: string;
+  valid_until: string;
+};
+
+export type AdminCertificateStats = {
+  valid: number; // includes valid-and-expiring-soon; not a disjoint bucket
+  expiring_soon: number;
+  expired: number;
+  revoked: number;
+};
+
 export type ApplicationDetail = Application & {
   documents: DocumentOut[];
   history: {
@@ -147,6 +184,7 @@ export type ApplicationDetail = Application & {
   requirements: { document_type: string; label: string; required: boolean; satisfied: boolean }[];
   allowed_actions: string[];
   inspection: Inspection | null;
+  certificate: Certificate | null;
   can_reschedule: boolean;
 };
 

@@ -107,6 +107,10 @@ export default function ApplicationDetailPage() {
   const canSubmit = app.allowed_actions.includes("SUBMITTED");
   const canSchedule = app.allowed_actions.includes("SCHEDULED");
   const canStartInspection = app.allowed_actions.includes("INSPECTION");
+  // Not allowed_actions-driven: (APPROVED, CERTIFICATE_ISSUED) is Edge(frozenset(), enabled=False)
+  // in ALLOWED_TRANSITIONS — deliberately system-only, never a generic edge. This is the one
+  // documented exception to "buttons come only from allowed_actions" (frontend/CLAUDE.md).
+  const canIssueCertificate = app.status === "APPROVED" && isOfficer;
   const requirementsMet = app.requirements.every((r) => !r.required || r.satisfied);
   const limits = meta?.limits;
   const atLimit = limits ? app.documents.length >= limits.max_documents : false;
@@ -229,6 +233,21 @@ export default function ApplicationDetailPage() {
     }
   }
 
+  async function issueCertificate() {
+    setBusy(true);
+    setActionError(null);
+    try {
+      const updated = await api<ApplicationDetail>(`/applications/${app.id}/certificate`, {
+        method: "POST",
+      });
+      setState({ kind: "ready", app: updated });
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function reschedule(newDate: string) {
     setBusy(true);
     setActionError(null);
@@ -276,8 +295,9 @@ export default function ApplicationDetailPage() {
         </Alert>
       ) : null}
 
-      {/* Actions come from allowed_actions: the UI never guesses permissions. */}
-      {app.allowed_actions.length > 0 ? (
+      {/* Actions come from allowed_actions: the UI never guesses permissions.
+          Exception: Issue certificate (canIssueCertificate), see its definition above. */}
+      {app.allowed_actions.length > 0 || canIssueCertificate ? (
         <div className="flex flex-wrap gap-2">
           {canSubmit ? (
             <Button onClick={() => setConfirmSubmit(true)} disabled={!requirementsMet || busy}>
@@ -307,6 +327,11 @@ export default function ApplicationDetailPage() {
           {canStartInspection ? (
             <Button onClick={() => void startInspection()} disabled={busy}>
               {busy ? "Starting…" : "Start inspection"}
+            </Button>
+          ) : null}
+          {canIssueCertificate ? (
+            <Button onClick={() => void issueCertificate()} disabled={busy}>
+              {busy ? "Issuing…" : "Issue certificate"}
             </Button>
           ) : null}
         </div>
@@ -364,6 +389,21 @@ export default function ApplicationDetailPage() {
               </Button>
             </div>
           ) : null}
+        </section>
+      ) : null}
+
+      {app.certificate ? (
+        <section className="grid gap-2 rounded-lg border p-4">
+          <p className="text-sm font-medium">{app.certificate.certificate_number}</p>
+          <p className="text-sm text-muted-foreground">
+            Valid {new Date(app.certificate.valid_from).toLocaleDateString()} –{" "}
+            {new Date(app.certificate.valid_until).toLocaleDateString()}
+          </p>
+          <Link href={`/certificates/${app.certificate.id}`} className="w-fit">
+            <Button variant="outline" size="sm">
+              View certificate
+            </Button>
+          </Link>
         </section>
       ) : null}
 

@@ -98,6 +98,7 @@ def _scoped(user: User) -> Select[tuple[Application]]:
         joinedload(Application.instrument),
         joinedload(Application.organization),
         joinedload(Application.inspection).joinedload(Inspection.assigned_officer),
+        joinedload(Application.certificate),
     )
     return scope_applications(stmt, user)
 
@@ -501,6 +502,24 @@ def transition(
         )
     db.commit()
     return application
+
+
+def apply_certificate_issued(db: Session, application: Application, user: User, *, ip: str) -> None:
+    """Called only from services/certificates.py, inside its own transaction. The
+    APPROVED -> CERTIFICATE_ISSUED edge is system-only (Edge(frozenset(), enabled=False)) and
+    never reachable through transition()/PATCH (step 8)."""
+    application.status = S.CERTIFICATE_ISSUED
+    _add_history(db, application, user, S.APPROVED, S.CERTIFICATE_ISSUED, None)
+    audit.log(
+        db,
+        actor=user,
+        action="APPLICATION_STATUS_CHANGED",
+        entity_type="application",
+        entity_id=application.id,
+        organization_id=application.organization_id,
+        details={"from": "APPROVED", "to": "CERTIFICATE_ISSUED", "note": None},
+        ip=ip,
+    )
 
 
 def reschedule(

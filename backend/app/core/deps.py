@@ -1,8 +1,9 @@
+import secrets
 import uuid
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -71,3 +72,13 @@ def require_roles(*roles: Role) -> Callable[..., User]:
         return user
 
     return dependency
+
+
+def require_cron_secret(
+    x_cron_secret: Annotated[str | None, Header(alias="X-Cron-Secret")] = None,
+) -> None:
+    """Machine-to-machine auth for the daily expiry job (step 10) — no user, no JWT."""
+    if x_cron_secret is None or not secrets.compare_digest(
+        x_cron_secret, get_settings().CRON_SECRET
+    ):
+        raise AuthError("Invalid or missing cron secret")

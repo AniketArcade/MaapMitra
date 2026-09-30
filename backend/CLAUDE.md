@@ -34,9 +34,13 @@ backend/
 │   ├── routers/           # thin route handlers
 │   │   ├── health.py  auth.py  users.py  instruments.py  applications.py  documents.py
 │   │   ├── inspections.py  # checklist/measurements (step 6)
-│   │   └── (later) certificates.py  public.py  jobs.py
+│   │   ├── certificates.py  # GET {id}, GET {id}/pdf (step 8; POST lives in applications.py)
+│   │   ├── public.py  # GET /public/verify/{certificate_number}, no auth (step 9)
+│   │   ├── jobs.py  # POST /jobs/expiry-check, X-Cron-Secret only (step 10)
+│   │   └── admin.py  # GET /admin/certificates/{stats,expiring-soon}, ADMIN_ROLES (step 10)
 │   ├── storage/           # Storage protocol: SupabaseStorage (REST) + MemoryStorage (tests)
-│   ├── pdf/               # (step 8) ReportLab certificate + QR
+│   ├── email/              # EmailSender protocol: ResendEmail (REST) + MemoryEmail (tests), step 10
+│   ├── pdf/               # certificate.py — ReportLab PDF + segno QR (step 8)
 │   ├── cli.py             # create-superadmin, create-bucket
 │   ├── seed.py            # demo data (python -m app.seed --password ...)
 │   └── seed_files.py      # tiny generated demo PDF/PNG
@@ -59,18 +63,23 @@ SUPABASE_BUCKET=documents
 STORAGE_BACKEND=supabase                     # supabase | memory (memory = tests only)
 PUBLIC_BASE_URL=https://<app>.vercel.app     # used in QR codes
 CORS_ORIGINS=http://localhost:3000,https://<app>.vercel.app
+EMAIL_BACKEND=resend                         # resend | memory (memory = local dev/tests, step 10)
 RESEND_API_KEY=...
+RESEND_FROM_EMAIL=...                        # required when EMAIL_BACKEND=resend
 CRON_SECRET=...
 ENV=development                              # development | test | production (cookie Secure flag, seed guard)
 TRUSTED_PROXY_HOPS=0                         # proxies appending X-Forwarded-For; measure on deploy
 APP_TIMEZONE=Asia/Kolkata                    # scheduling "today" (step 5); ASSUMPTION: deployment serves India
 SCHEDULING_MAX_DAYS_AHEAD=180                # typo guard on scheduled_date
+EXPIRY_REMINDER_30D_DAYS=30                  # step 10, ASSUMPTION: not a real Legal Metrology rule
+EXPIRY_REMINDER_7D_DAYS=7                    # step 10, ASSUMPTION: not a real Legal Metrology rule
 ```
 
 Load it through `pydantic-settings` in `core/config.py`. Never read `os.environ` scattered around the code.
 
 - `DATABASE_URL`, `JWT_SECRET` (≥32 chars) and `CRON_SECRET` are required: the app refuses to start without them.
 - With `STORAGE_BACKEND=supabase` (the default), `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are required too; placeholders are rejected at startup. Local commands against `lm_dev`/`lm_test` can set `STORAGE_BACKEND=memory`.
+- Same shape for email (step 10): with `EMAIL_BACKEND=resend` (the default), `RESEND_API_KEY` and `RESEND_FROM_EMAIL` are required at startup. Local dev without a real Resend account can set `EMAIL_BACKEND=memory`.
 - In `.env`, never put a `# comment` on the same line as an empty value: python-dotenv reads the comment as the value.
 - `SUPABASE_URL` is normalised to its origin, so a pasted `…/rest/v1` (Data API) URL still works.
 - Configuration errors (`ConfigError`) name the field and reason only, never values.
@@ -96,6 +105,8 @@ Workflow for every schema change:
 | `0003` | applications, application_status_history, documents (+ `application_number_seq`, 3 enums, partial unique index) | 2026-09-30 (bucket `documents` created; seed: `APP-2026-000001` for `OTH-0001`) |
 | `0004` | inspections (+ `ix_inspections_officer_date`) | 2026-09-30 (no seed changes; scheduling is driven live in the demo) |
 | `0005` | inspection checklist (`inspection_checklist_items`, `inspection_measurements`, 3 new `inspections` columns, `checklist_result` enum, `document_type` gains `INSPECTION_EVIDENCE`) | 2026-09-30 (no seed changes; the field-inspection flow is driven live in the demo) |
+| `0006` | certificates (+ `certificate_number_seq`, `certificate_status` enum) | 2026-09-30 (no seed changes; issuance is driven live in the demo) |
+| `0007` | certificate reminders (`reminder_30d_sent_at`, `reminder_7d_sent_at`, both nullable `Date`) | 2026-09-30 (no seed changes; the expiry job is driven live in the demo) |
 
 ## Layering rules
 
@@ -138,13 +149,13 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
 - `documents`: `storage_path` = `applications/{application_id}/{document_id}.{pdf|jpg|png}` (never a URL, never the user's filename). `content_type` is the **sniffed** type. Max 10 per application.
 - `inspections` (spec `docs/specs/05-officer-dashboard.md`, extended by `docs/specs/06-inspection-checklist.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign only in step 5: always the officer who scheduled it; also the only officer who may start/edit/submit the field inspection, step 6 D1). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` doubles as the "my inspections" list: `GET /applications?status=INSPECTION&sort=scheduled_asc`. Step 6 adds `overall_remarks` (text, null), `submitted_at` (timestamptz, null — the single source of truth for "this checklist is locked"), `submitted_by` (FK → users, `ON DELETE RESTRICT`, null).
 - `inspection_checklist_items` / `inspection_measurements` (spec `docs/specs/06-inspection-checklist.md`): one row per `CHECKLIST_TEMPLATES`/`MEASUREMENT_TEMPLATES` entry for the instrument's type (`core/inspection_templates.py`, ASSUMPTION — illustrative demo content), **snapshotted** when the inspection starts (`SCHEDULED → INSPECTION`) so a later template edit never changes an in-progress or already-submitted inspection. `inspection_checklist_items.result` is a nullable `checklist_result` enum (`PASS`/`FAIL`/`NA`); `inspection_measurements.expected_value` is `instrument.capacity * fraction` computed at start time, `observed_value` filled by the officer. Both `ON DELETE CASCADE` from `inspections`, unique on `(inspection_id, item_key)` / `(inspection_id, label)`.
+- `certificates` (spec `docs/specs/08-certificate-pdf-qr.md`): one row per application (`application_id` unique FK, `ON DELETE RESTRICT`), created by `services/certificates.py: issue()` — never through `transition()`. `certificate_number` = `LM-CERT-{UTC year}-{nextval('certificate_number_seq'):06d}`. `snapshot` (JSONB) freezes the instrument/business/approver fields shown on the PDF at issuance time — a deliberate JSONB blob, not relational rows like the checklist (it's one immutable bundle written once and always read whole, the opposite case from spec 06's checklist items), needed because the instrument unlocks (editable again) the moment the application reaches this terminal status. `valid_from`/`valid_until` = issue date + `CERTIFICATE_VALIDITY_YEARS` (Settings field, default 2 — ASSUMPTION, not a real Legal Metrology rule). `status` starts `VALID`; the expiry job (step 10) is the only thing that ever moves it, and only to `EXPIRED` — `REVOKED` has no writer anywhere yet (no revoke action exists). `pdf_path` = `certificates/{id}.pdf`, stored in the same single `SUPABASE_BUCKET` as documents (no new bucket). `data_hash`: SHA-256 hex of a fixed pipe-joined string of the certificate's own fields (`app/services/certificates.py: _data_hash()`) — a tamper-evidence fingerprint, not a cryptographic file signature (root `CLAUDE.md`'s "hash-based in MVP" decision). No `qr_token` column: the QR/public URL encodes `certificate_number` directly (see QR section below). `reminder_30d_sent_at`/`reminder_7d_sent_at` (migration `0007`, nullable `Date`): the expiry job's idempotency mechanism (see Expiry job below) — `NULL` means "not yet sent," never re-derived from a log.
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
   - instrument `instrument_uid`: `LM-JH-DHN-000123`
-  - certificate `certificate_number`: `LM-CERT-2026-001245`
+  - certificate `certificate_number`: `LM-CERT-2026-000123`
 - `instruments`: plain `latitude` / `longitude` columns (no PostGIS).
 - `documents`: store `storage_path` only. **Never store public URLs.**
-- `certificates`: `valid_from`, `valid_until`, `status`, `pdf_path`, `qr_token`, `data_hash` (SHA-256 of the certificate fields).
 
 ## Application status flow
 
@@ -203,6 +214,40 @@ Certificate status: `VALID` · `EXPIRED` · `REVOKED`
   `APPROVED`, so the instrument stays locked until step 8 issues a certificate; `REJECTED` already falls
   outside it and unlocks immediately.
 
+### Certificate issuance (step 8, spec `docs/specs/08-certificate-pdf-qr.md`)
+- `APPROVED → CERTIFICATE_ISSUED` is `Edge(frozenset(), enabled=False)` in `ALLOWED_TRANSITIONS` —
+  **system-only**, structurally unreachable through `transition()`/`PATCH .../status` for any role
+  (empty `roles` frozenset). `POST /api/applications/{id}/certificate`
+  (`services/certificates.py: issue()`) bypasses `transition()` entirely and does its own
+  scope/role/status checks, open to **any in-scope `LM_OFFICER`** (spec 07 D1's reasoning again).
+- Evaluation order matters here too: `applications_service.load()` (scope 404) runs **before** the
+  role check, but in practice the router's `Officer` dependency (`require_roles(Role.LM_OFFICER)`)
+  already rejects every non-officer with 403 before the handler body runs at all — the same behavior
+  every other single-role-gated endpoint has (e.g. `reschedule_inspection`). Only an in-role,
+  out-of-jurisdiction officer reaches the service's own scope check and gets 404.
+- Mirrors `documents.py: upload()`'s lock ordering: the PDF is rendered and `storage.put()` happens
+  **before** any row lock; the application row is then locked
+  (`.with_for_update().execution_options(populate_existing=True)` — **do not** drop
+  `populate_existing`, or a concurrent double-issue race silently inserts two `Certificate` rows,
+  since the identity map would return the stale pre-lock `APPROVED` status to the second caller),
+  re-checked, and the `Certificate` insert + status flip commit together.
+- `applications_service.apply_certificate_issued(db, application, user, ip=ip)` (new, small) sets the
+  status, writes the `ApplicationStatusHistory` row and the generic `APPLICATION_STATUS_CHANGED` audit
+  row — kept in `services/applications.py` so the timeline UI and audit convention stay uniform.
+  `services/certificates.py` separately writes a specific `CERTIFICATE_ISSUED` audit row
+  (`entity_type="certificate"`, `details={certificate_number, valid_until, data_hash}`) — the same
+  generic-plus-specific pairing `transition()` already uses for `INSPECTION_SCHEDULED`/`INSPECTION_STARTED`.
+- `ApplicationDetail.certificate` (`CertificateOut | None`) mirrors `.inspection`: eager-loaded via
+  `Application.certificate` (`lazy="raise"`, joinedloaded in `_scoped()`), so `/applications/[id]`
+  shows the certificate summary without a second fetch once issued.
+- `app/pdf/certificate.py`: `render()` (ReportLab, one page, in-memory `BytesIO`) and
+  `qr_code_data_uri()`/`qr_png_bytes()` (`segno`, encoding the fixed QR URL below) — content list only,
+  not a mandated legal layout (ASSUMPTION, same caveat `core/inspection_templates.py` carries).
+  `CertificateOut.qr_code_data_uri` is regenerated fresh on every `GET`, from `certificate_number`
+  alone (deterministic) — **never stored**, per the QR section below.
+- Audit actions: `CERTIFICATE_ISSUED`, `CERTIFICATE_URL_ISSUED` (the latter on `GET
+  /certificates/{id}/pdf`, mirrors `DOCUMENT_URL_ISSUED`, committed in the service).
+
 ## API
 
 Base `/api`. REST + JSON.
@@ -218,7 +263,10 @@ POST  /api/documents             GET   /api/documents/{id}/url     # signed URL
 GET   /api/inspections/meta      GET   /api/inspections/{id}
 PATCH /api/inspections/{id}      POST  /api/inspections/{id}/submit
 GET   /api/certificates/{id}     GET   /api/certificates/{id}/pdf
-POST  /api/jobs/expiry-check     # requires X-Cron-Secret header
+POST  /api/applications/{id}/certificate   # LM_OFFICER only; issues a certificate while APPROVED
+POST  /api/jobs/expiry-check     # requires X-Cron-Secret header, no rate limit (step 10)
+GET   /api/admin/certificates/stats            # ADMIN_ROLES; {valid, expiring_soon, expired, revoked}
+GET   /api/admin/certificates/expiring-soon    # ADMIN_ROLES; Page[CertificateOut], valid_until asc
 GET   /api/public/verify/{certificate_number}                     # no auth
 GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}
 CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
@@ -228,19 +276,70 @@ PATCH /api/applications/{id}/inspection   # LM_OFFICER only; reschedule while SC
 DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSPECTION evidence (step 6)
 ```
 
-### Public verify
-- Returns **only** certificate number, instrument type/model/serial, `valid_until` and status.
-- No owner PII, no documents, no internal IDs.
-- Computes status **live**: if `valid_until < today`, return EXPIRED even if the cron hasn't run yet.
-- Rate-limited.
+### Public verify (step 9, spec `docs/specs/09-public-verify.md`)
+- `PublicVerifyOut` (`app/schemas/public.py`) is the **complete** field list: `certificate_number`,
+  `status`, `instrument_type_label`, `manufacturer`, `model`, `serial_number`, `valid_from`,
+  `valid_until`. No owner PII (`organization_name`, `address`), no documents, no internal IDs
+  (`id`, `application_id`), no `pdf_path`/`data_hash`. Never link to the certificate PDF from the
+  public page either — the PDF's snapshot carries exactly the fields this endpoint withholds.
+- `instrument_type_label` is resolved server-side from `TYPE_LABELS` (`core/instrument_types.py`,
+  same dict `app/pdf/certificate.py` already uses) instead of a raw `InstrumentType` code, since the
+  caller has no session and can't resolve a label via the auth-gated `GET /instruments/meta`.
+- Computes status **live** via `core/certificate_status.py: effective_status(status, valid_until,
+  today=...)`: `REVOKED` (stored) always wins, else `valid_until < today` → `EXPIRED`, else the stored
+  status. This is why a certificate shows `EXPIRED` correctly even before the expiry job (step 10)
+  next runs. `services/certificates.py: expiry_check()` calls the same function to decide what to
+  persist, so the two are structurally guaranteed to agree — never re-derived separately.
+- `services/certificates.py: public_verify()` — one indexed `certificate_number` lookup, no scope
+  check (deliberately public), no joins (every field already lives in `certificates.snapshot`).
+  404 `"Certificate not found"` if no row matches; exact string match, no normalization.
+- No audit row written per verify (anonymous, high-volume, non-mutating — doesn't fit `audit_logs`'
+  actor-centric shape).
+- Rate-limited: `@limiter.limit("30/minute")` per IP (`core/rate_limit.py`'s existing `slowapi`
+  `limiter`) — not just abuse prevention, `certificate_number`'s sequential format is enumerable.
 
 ### QR
 - Encodes `{PUBLIC_BASE_URL}/verify/{certificate_number}`. Never localhost.
 - The DB is the source of truth, never the PDF or QR.
 
-### Expiry job
-- 30 days before expiry → reminder. 7 days before → urgent reminder. Past expiry → set `EXPIRED`.
-- Must be idempotent: running it twice in one day sends no duplicate emails.
+### Expiry job (step 10, spec `docs/specs/10-expiry-job.md`)
+- `POST /api/jobs/expiry-check`: no user, no JWT — authenticated by a shared secret header
+  (`X-Cron-Secret`, `core/deps.py: require_cron_secret()`, `secrets.compare_digest` against
+  `CRON_SECRET`) since it's called by an external scheduler (Render Cron / GitHub Actions — root
+  `CLAUDE.md`'s own still-open decision on which one), not a person.
+- `services/certificates.py: expiry_check()` scans every `VALID` certificate (one unbounded query —
+  sized for the MVP, not batched/paginated) and, per certificate: sends the 30-day reminder if
+  `valid_until <= today + EXPIRY_REMINDER_30D_DAYS` **and** `reminder_30d_sent_at is None`; same for
+  the 7-day ("urgent") reminder against its own column; then flips `status` to `EXPIRED` via
+  `effective_status()` (above) if it now evaluates to that.
+- **Idempotent by construction, not by a log:** a `reminder_*_sent_at` column is only set once the
+  send actually succeeds. Re-running the job the same day is a no-op for anything already sent; a job
+  that's late by weeks still sends both reminders (whichever are still outstanding) and expires the
+  certificate in one catch-up run, in that order — reminder before expiry.
+- Each certificate is processed independently (own `try`/`except`, own commits): one certificate's
+  email failure (or any other error) never blocks another's, and never blocks its own status flip —
+  the flip and the email are independent outcomes. A failed send simply leaves its `sent_at` column
+  `NULL` for the next run to retry.
+- Recipients: every `BUSINESS` user in the certificate's `organization_id` (ordinarily one; not
+  DB-enforced, so zero or several are both tolerated — zero is counted as `skipped_no_recipient`,
+  never a crash).
+- `CERTIFICATE_EXPIRED` is the only audit row this job writes (`actor=None`, the same "system actor"
+  precedent `cli.py: create_superadmin()`'s own `USER_CREATED` row already uses) — reminder sends are
+  **not** audited (anonymous-adjacent, high-volume, and `reminder_*_sent_at` is already their own
+  record of what happened).
+- Not rate-limited (see the API block above) — a daily scheduler isn't the kind of traffic
+  `/auth/login`/`/public/verify`'s limits exist for.
+
+### Admin (step 10, spec `docs/specs/10-expiry-job.md`)
+- `GET /admin/certificates/{stats,expiring-soon}` are `ADMIN_ROLES`-only (`core/roles.py`, reused here
+  for its first read endpoint) and jurisdiction-scoped through the existing `scope_certificates` — no
+  new scoping helper. This is deliberately **just** the expiry slice, not the fuller "users, audit
+  log" admin console root `CLAUDE.md`'s role table and this file's own `/admin` structure-tree comment
+  once gestured at — neither was ever actually built; see spec 10 §1/§10 D1.
+- `expiring_soon` in both responses means `status == VALID and valid_until <= today +
+  EXPIRY_REMINDER_30D_DAYS` — the same threshold the reminder job itself uses, not a second
+  independent number. `AdminCertificateStats.valid` is **inclusive** of `expiring_soon` (not a
+  disjoint bucket): every expiring-soon certificate is still counted as valid.
 
 ## Auth and RBAC (spec: `docs/specs/01-login-rbac.md`)
 
@@ -250,7 +349,7 @@ DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSP
 - **Commit-then-raise:** after a security-relevant write (failed-login audit, token revocation), `db.commit()` before raising.
 - Cookies: `lm_refresh` (httpOnly, `Path=/api/auth`) holds the refresh token; `lm_session=1` (httpOnly, `Path=/`) is a presence flag for the frontend `proxy.ts`.
 - Refresh rotates on every call. A revoked token seen again within 10 s is a lost race (401, cookies kept); after that it revokes the user's whole token family.
-- Rate limits are in-memory (`core/rate_limit.py`): login 5/min per email + 20/min per IP, register 10/hour per IP. **Production shortcut:** resets on restart, not shared across instances.
+- Rate limits are in-memory (`core/rate_limit.py`): login 5/min per email + 20/min per IP, register 10/hour per IP, public verify 30/min per IP (step 9). **Production shortcut:** resets on restart, not shared across instances.
 - CORS: browser traffic normally arrives same-origin through the Next.js `/api/*` rewrite. CORS only matters for direct calls.
 
 ## Documents and storage

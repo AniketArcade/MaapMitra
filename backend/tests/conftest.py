@@ -11,6 +11,7 @@ os.environ["CRON_SECRET"] = "test-cron-secret"
 os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 os.environ["TRUSTED_PROXY_HOPS"] = "0"
 os.environ["STORAGE_BACKEND"] = "memory"
+os.environ["EMAIL_BACKEND"] = "memory"
 
 import uuid  # noqa: E402
 from collections.abc import Callable, Iterator  # noqa: E402
@@ -27,6 +28,7 @@ from app.core.rate_limit import reset_rate_limits  # noqa: E402
 from app.core.roles import OrgType, Role  # noqa: E402
 from app.core.security import create_access_token, hash_password  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
+from app.email import MemoryEmail, get_email  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.models import Application, Instrument, Organization, User  # noqa: E402
 from app.schemas.instrument import InstrumentCreate  # noqa: E402
@@ -53,6 +55,9 @@ def _clean() -> Iterator[None]:
     storage = get_storage()
     assert isinstance(storage, MemoryStorage)
     storage.clear()
+    email = get_email()
+    assert isinstance(email, MemoryEmail)
+    email.clear()
     yield
     with engine.begin() as conn:
         conn.execute(
@@ -177,6 +182,13 @@ def storage() -> MemoryStorage:
     return s
 
 
+@pytest.fixture
+def email() -> MemoryEmail:
+    e = get_email()
+    assert isinstance(e, MemoryEmail)
+    return e
+
+
 def upload(
     client: TestClient,
     owner: User,
@@ -255,7 +267,7 @@ def make_application(make_user, make_instrument) -> Callable[..., Application]: 
                     StatusChange(status=S.REJECTED, note="Invoice is not legible"),
                     ip="test",
                 )
-            elif target in (S.SCHEDULED, S.INSPECTION):
+            elif target in (S.SCHEDULED, S.INSPECTION, S.APPROVED):
                 from app.core import clock
 
                 app_service.transition(
@@ -265,11 +277,43 @@ def make_application(make_user, make_instrument) -> Callable[..., Application]: 
                     StatusChange(status=S.SCHEDULED, scheduled_date=clock.today()),
                     ip="test",
                 )
-                if target == S.INSPECTION:
+                if target in (S.INSPECTION, S.APPROVED):
                     # The assigned officer is always `reviewer` (self-assign, spec 05 D2), so
                     # `officer` must be the one starting it too (spec 06 D1).
                     app_service.transition(
                         s, reviewer, application.id, StatusChange(status=S.INSPECTION), ip="test"
+                    )
+                if target == S.APPROVED:
+                    from app.schemas.inspection import (
+                        ChecklistItemUpdate,
+                        InspectionUpdate,
+                        MeasurementUpdate,
+                    )
+                    from app.services import inspections as inspections_service
+
+                    inspection_id = app_service.load(s, user, application.id).inspection.id
+                    detail = inspections_service.detail(s, reviewer, inspection_id)
+                    inspections_service.patch(
+                        s,
+                        reviewer,
+                        inspection_id,
+                        InspectionUpdate(
+                            checklist_items=[
+                                ChecklistItemUpdate(item_key=i.item_key, result="PASS")
+                                for i in detail.checklist_items
+                            ],
+                            measurements=[
+                                MeasurementUpdate(
+                                    label=m.label, observed_value=str(m.expected_value)
+                                )
+                                for m in detail.measurements
+                            ],
+                        ),
+                    )
+                    inspections_service.submit(s, reviewer, inspection_id, ip="test")
+                    # Any in-scope officer may approve (spec 07 D1), not just `reviewer`.
+                    app_service.transition(
+                        s, reviewer, application.id, StatusChange(status=S.APPROVED), ip="test"
                     )
             elif target != S.DOCUMENT_REVIEW:
                 raise ValueError(f"factory can't reach {status}")
