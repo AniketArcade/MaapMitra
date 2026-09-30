@@ -16,13 +16,16 @@ from app.core.application_types import (
     ApplicationType,
 )
 from app.core.config import get_settings
+from app.core.document_review_templates import DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
 from app.core.errors import Conflict, Forbidden, NotFound, Unprocessable
+from app.core.gatc_types import InspectionAssigneeRole
 from app.core.inspection_templates import (
     CHECKLIST_TEMPLATES,
     MEASUREMENT_TEMPLATES,
     measurement_label,
 )
 from app.core.roles import Role
+from app.core.verification_types import verification_mode_for
 from app.models.application import (
     ACTIVE_INDEX,
     Application,
@@ -30,6 +33,7 @@ from app.models.application import (
     application_number_seq,
 )
 from app.models.document import Document
+from app.models.document_review_checklist import DocumentReviewChecklistItem
 from app.models.inspection import Inspection
 from app.models.inspection_checklist import InspectionChecklistItem, InspectionMeasurement
 from app.models.instrument import Instrument
@@ -38,9 +42,11 @@ from app.schemas.application import (
     ApplicationCreate,
     ApplicationUpdate,
     InspectionReschedule,
+    ReviewChecklistUpdate,
     StatusChange,
 )
 from app.services import audit
+from app.services import gatc as gatc_service
 from app.services import inspections as inspections_service
 from app.services import instruments as instruments_service
 from app.services.scoping import scope_applications
@@ -61,15 +67,25 @@ ALLOWED_TRANSITIONS: dict[tuple[ApplicationStatus, ApplicationStatus], Edge] = {
     (S.DRAFT, S.SUBMITTED): Edge(frozenset({Role.BUSINESS}), enabled=True),
     (S.SUBMITTED, S.DOCUMENT_REVIEW): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     (S.DOCUMENT_REVIEW, S.REJECTED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
+    # Step 11: the "fix and resubmit" deficiency loop.
+    (S.DOCUMENT_REVIEW, S.DOCUMENTS_DEFICIENT): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
+    (S.DOCUMENTS_DEFICIENT, S.SUBMITTED): Edge(frozenset({Role.BUSINESS}), enabled=True),
     (S.DOCUMENT_REVIEW, S.SCHEDULED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
-    (S.SCHEDULED, S.INSPECTION): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
-    (S.INSPECTION, S.APPROVED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
-    (S.INSPECTION, S.REJECTED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
+    # Step 15: GATC added to the three inspection-stage edges below — a GATC-role user reaches
+    # them only once assigned (Inspection.assigned_officer_id), scheduling remains LM_OFFICER-only
+    # above (a GATC org/user is a *target* of scheduling, never the one who schedules).
+    (S.SCHEDULED, S.INSPECTION): Edge(frozenset({Role.LM_OFFICER, Role.GATC}), enabled=True),
+    (S.INSPECTION, S.APPROVED): Edge(frozenset({Role.LM_OFFICER, Role.GATC}), enabled=True),
+    (S.INSPECTION, S.REJECTED): Edge(frozenset({Role.LM_OFFICER, Role.GATC}), enabled=True),
     # System only: happens inside certificate creation (step 8), never via PATCH.
     (S.APPROVED, S.CERTIFICATE_ISSUED): Edge(frozenset(), enabled=False),
 }
 
 REJECT_NOTE_MIN = 10
+# Step 11: DOCUMENT_REVIEW -> DOCUMENTS_DEFICIENT requires a note explaining what's missing,
+# same length rule as REJECTED's, kept as a sibling constant rather than reused so the two can
+# diverge later without an unrelated rename.
+DEFICIENCY_NOTE_MIN = 10
 
 
 def allowed_actions(application: Application, user: User) -> list[ApplicationStatus]:
@@ -99,6 +115,7 @@ def _scoped(user: User) -> Select[tuple[Application]]:
         joinedload(Application.organization),
         joinedload(Application.inspection).joinedload(Inspection.assigned_officer),
         joinedload(Application.certificate),
+        joinedload(Application.payment),
     )
     return scope_applications(stmt, user)
 
@@ -157,6 +174,10 @@ def create(db: Session, user: User, body: ApplicationCreate, *, ip: str) -> Appl
         status=S.DRAFT,
         state_code=instrument.state_code,
         district_code=instrument.district_code,
+        # Spec 14: snapshot instrument.transportable -> verification_mode at creation, same
+        # timing/reasoning as the state_code/district_code snapshot just above. A later change to
+        # the instrument's transportable never retroactively touches this application.
+        verification_mode=verification_mode_for(instrument.transportable),
         business_notes=body.business_notes or None,
         created_by=user.id,
         inspection=None,  # a brand-new application never has one; avoids a lazy="raise" trip
@@ -183,6 +204,7 @@ def create(db: Session, user: User, body: ApplicationCreate, *, ip: str) -> Appl
             "application_number": application.application_number,
             "instrument_uid": instrument.instrument_uid,
             "application_type": application.application_type.value,
+            "verification_mode": application.verification_mode.value,
         },
         ip=ip,
     )
@@ -380,13 +402,50 @@ def transition(
             f"A rejection reason of at least {REJECT_NOTE_MIN} characters is required",
             field="note",
         )
+    if target == S.DOCUMENTS_DEFICIENT and (note is None or len(note) < DEFICIENCY_NOTE_MIN):
+        raise Unprocessable(
+            f"A deficiency note of at least {DEFICIENCY_NOTE_MIN} characters is required",
+            field="note",
+        )
     scheduled_date: date | None = None
+    # Step 15: who the Inspection row (created below) will be assigned to. Defaults to
+    # self-assigning the scheduling officer — completely unchanged from before this step — unless
+    # the request names a GATC organization/user, resolved and validated below.
+    assignee_user = user
+    assignee_role = InspectionAssigneeRole.LM_OFFICER
     if target == S.SCHEDULED:
         scheduled_date = _validate_scheduled_date(body.scheduled_date)
-    elif body.scheduled_date is not None:
-        raise Unprocessable(
-            "scheduled_date is only allowed when scheduling an inspection", field="scheduled_date"
+        # Step 11: can't schedule until the officer has worked through the whole document
+        # review checklist, mirroring the "all required documents present" gate on submit below.
+        unchecked = list(
+            db.scalars(
+                select(DocumentReviewChecklistItem.label)
+                .where(
+                    DocumentReviewChecklistItem.application_id == application.id,
+                    DocumentReviewChecklistItem.checked.is_(False),
+                )
+                .order_by(DocumentReviewChecklistItem.created_at)
+            )
         )
+        if unchecked:
+            raise Conflict(f"Document review checklist incomplete: {', '.join(unchecked)}")
+        if body.gatc_organization_id is not None:
+            assert body.gatc_user_id is not None  # StatusChange.gatc_pair_valid already enforces
+            assignee_user = gatc_service.resolve_gatc_assignment(
+                db, user, application, body.gatc_organization_id, body.gatc_user_id
+            )
+            assignee_role = InspectionAssigneeRole.GATC
+    else:
+        if body.scheduled_date is not None:
+            raise Unprocessable(
+                "scheduled_date is only allowed when scheduling an inspection",
+                field="scheduled_date",
+            )
+        if body.gatc_organization_id is not None:
+            raise Unprocessable(
+                "gatc_organization_id is only allowed when scheduling an inspection",
+                field="gatc_organization_id",
+            )
     if target == S.SUBMITTED:
         present = set(
             db.scalars(
@@ -441,13 +500,14 @@ def transition(
         inspection = Inspection(
             application_id=application.id,
             scheduled_date=scheduled_date,
-            assigned_officer_id=user.id,
+            assigned_officer_id=assignee_user.id,
+            assignee_role=assignee_role,
         )
         db.add(inspection)
         # Keep the already-loaded (lazy="raise") relationship in sync in-memory: the caller's
         # returned `application` was loaded before this row existed, and expire_on_commit=False
         # means it would otherwise never see it without a fresh query.
-        inspection.assigned_officer = user
+        inspection.assigned_officer = assignee_user
         application.inspection = inspection
         audit.log(
             db,
@@ -456,7 +516,50 @@ def transition(
             entity_type="application",
             entity_id=application.id,
             organization_id=application.organization_id,
-            details={"scheduled_date": scheduled_date.isoformat()},
+            details={
+                "scheduled_date": scheduled_date.isoformat(),
+                "assignee_role": assignee_role.value,
+                "assigned_officer_id": str(assignee_user.id),
+            },
+            ip=ip,
+        )
+    if target == S.DOCUMENT_REVIEW:
+        # Step 11: snapshot the document-review checklist. If this application has been through
+        # DOCUMENT_REVIEW before (DOCUMENTS_DEFICIENT -> SUBMITTED -> DOCUMENT_REVIEW again), the
+        # rows already exist (item_key is unique per application) — reset them to unchecked
+        # rather than re-insert, so the officer re-verifies each item against the resubmission
+        # instead of inheriting stale answers, while item_key/label stay snapshotted from the
+        # first pass (mirrors inspection_checklist_items never changing after the fact).
+        existing_review_items = list(
+            db.scalars(
+                select(DocumentReviewChecklistItem).where(
+                    DocumentReviewChecklistItem.application_id == application.id
+                )
+            )
+        )
+        if existing_review_items:
+            for row in existing_review_items:
+                row.checked = False
+        else:
+            for item in DOCUMENT_REVIEW_CHECKLIST_TEMPLATE:
+                db.add(
+                    DocumentReviewChecklistItem(
+                        application_id=application.id,
+                        item_key=item.key,
+                        label=item.label,
+                    )
+                )
+        audit.log(
+            db,
+            actor=user,
+            action="DOCUMENT_REVIEW_STARTED",
+            entity_type="application",
+            entity_id=application.id,
+            organization_id=application.organization_id,
+            details={
+                "checklist_item_count": len(DOCUMENT_REVIEW_CHECKLIST_TEMPLATE),
+                "reset": bool(existing_review_items),
+            },
             ip=ip,
         )
     if target == S.INSPECTION:
@@ -547,5 +650,42 @@ def reschedule(
         details={"changes": {"scheduled_date": [old_date.isoformat(), new_date.isoformat()]}},
         ip=ip,
     )
+    db.commit()
+    return application
+
+
+def review_checklist_items(
+    db: Session, application_id: uuid.UUID
+) -> list[DocumentReviewChecklistItem]:
+    """Step 11: the document-review checklist snapshot for an application, in template order."""
+    return list(
+        db.scalars(
+            select(DocumentReviewChecklistItem)
+            .where(DocumentReviewChecklistItem.application_id == application_id)
+            .order_by(DocumentReviewChecklistItem.created_at)
+        )
+    )
+
+
+def patch_review_checklist(
+    db: Session,
+    user: User,
+    application_id: uuid.UUID,
+    body: ReviewChecklistUpdate,
+    *,
+    ip: str,
+) -> Application:
+    """Step 11: LM_OFFICER toggles individual document-review checklist items, only while the
+    application is under DOCUMENT_REVIEW. Mirrors services/inspections.py: patch()'s partial-save
+    shape (unknown item_key -> 422, no per-call audit row — same as that endpoint)."""
+    application = load(db, user, application_id, for_update=True)
+    if application.status != S.DOCUMENT_REVIEW:
+        raise Conflict("The review checklist can only be edited during document review")
+    by_key = {i.item_key: i for i in review_checklist_items(db, application.id)}
+    for entry in body.items:
+        item = by_key.get(entry.item_key)
+        if item is None:
+            raise Unprocessable(f"Unknown checklist item: {entry.item_key}", field="items")
+        item.checked = entry.checked
     db.commit()
     return application

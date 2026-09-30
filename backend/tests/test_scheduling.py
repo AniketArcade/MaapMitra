@@ -30,6 +30,21 @@ def _schedule(client: TestClient, user, application_id, scheduled_date: str | No
     )
 
 
+def _check_all_review_items(client: TestClient, officer, application_id) -> None:  # noqa: ANN001
+    """Step 11: SCHEDULED is gated on the document review checklist being fully checked."""
+    detail = client.get(f"/api/applications/{application_id}", headers=auth_header(officer)).json()
+    res = client.patch(
+        f"/api/applications/{application_id}/review-checklist",
+        json={
+            "items": [
+                {"item_key": i["item_key"], "checked": True} for i in detail["review_checklist"]
+            ]
+        },
+        headers=auth_header(officer),
+    )
+    assert res.status_code == 200, res.text
+
+
 def _reschedule(client: TestClient, user, application_id, scheduled_date: str):  # noqa: ANN001, ANN201
     return client.patch(
         f"/api/applications/{application_id}/inspection",
@@ -46,6 +61,7 @@ def _reschedule(client: TestClient, user, application_id, scheduled_date: str): 
 def test_schedule_success(client: TestClient, make_user, make_application) -> None:  # noqa: ANN001
     officer = make_user(Role.LM_OFFICER)
     app = make_application(status="DOCUMENT_REVIEW", officer=officer)
+    _check_all_review_items(client, officer, app.id)
     d = clock.today().isoformat()
     res = _schedule(client, officer, app.id, d)
     assert res.status_code == 200, res.text
@@ -68,6 +84,7 @@ def test_schedule_success(client: TestClient, make_user, make_application) -> No
 def test_schedule_writes_one_of_each_row(client: TestClient, make_user, make_application) -> None:  # noqa: ANN001
     officer = make_user(Role.LM_OFFICER)
     app = make_application(status="DOCUMENT_REVIEW", officer=officer)
+    _check_all_review_items(client, officer, app.id)
     res = _schedule(client, officer, app.id, clock.today().isoformat())
     assert res.status_code == 200
     history = [h for h in res.json()["history"] if h["to_status"] == "SCHEDULED"]
@@ -105,7 +122,9 @@ def test_schedule_date_boundaries(
     officer = make_user(Role.LM_OFFICER)
 
     def app_() -> object:
-        return make_application(status="DOCUMENT_REVIEW", officer=officer)
+        a = make_application(status="DOCUMENT_REVIEW", officer=officer)
+        _check_all_review_items(client, officer, a.id)
+        return a
 
     def sched(delta_days: int) -> int:
         d = (frozen_today + timedelta(days=delta_days)).isoformat()
@@ -132,6 +151,7 @@ def test_schedule_role_and_scope(client: TestClient, make_user, make_application
 def test_concurrent_schedule_one_wins(app, make_user, make_application) -> None:  # noqa: ANN001
     officer = make_user(Role.LM_OFFICER)
     in_review = make_application(status="DOCUMENT_REVIEW", officer=officer)
+    _check_all_review_items(TestClient(app, base_url=BASE_URL), officer, in_review.id)
     d = clock.today().isoformat()
     statuses: list[int] = []
     barrier = threading.Barrier(2)
@@ -161,6 +181,7 @@ def test_schedule_races_instrument_address_patch(
     officer = make_user(Role.LM_OFFICER)
     instrument = make_instrument(owner)
     in_review = make_application(owner, instrument, status="DOCUMENT_REVIEW", officer=officer)
+    _check_all_review_items(TestClient(app, base_url=BASE_URL), officer, in_review.id)
     d = clock.today().isoformat()
     results: dict[str, int] = {}
     barrier = threading.Barrier(2)
@@ -311,6 +332,7 @@ def test_sort_scheduled_asc(client: TestClient, make_user, make_application) -> 
     with_inspection = []
     for offset in (10, 1, 5):
         app = make_application(owner, status="DOCUMENT_REVIEW", officer=officer)
+        _check_all_review_items(client, officer, app.id)
         d = (clock.today() + timedelta(days=offset)).isoformat()
         res = _schedule(client, officer, app.id, d)
         assert res.status_code == 200
@@ -348,6 +370,7 @@ def test_list_query_count_does_not_grow_with_page_size(
     owner = make_user(Role.BUSINESS)
     for offset in range(5):
         app = make_application(owner, status="DOCUMENT_REVIEW", officer=officer)
+        _check_all_review_items(client, officer, app.id)
         _schedule(client, officer, app.id, (clock.today() + timedelta(days=offset)).isoformat())
 
     counted: list[str] = []

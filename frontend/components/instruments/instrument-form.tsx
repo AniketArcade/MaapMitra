@@ -6,9 +6,17 @@ import { FormField } from "@/components/auth/form-field";
 import { SelectField } from "@/components/select-field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { CategoryPicker } from "@/components/instruments/category-picker";
+import {
+  DynamicFieldRenderer,
+  initCategoryValues,
+  validateCategoryValues,
+} from "@/components/instruments/dynamic-field-renderer";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { getInstrumentMeta } from "@/lib/meta";
+import { categoryById, getInstrumentMeta } from "@/lib/meta";
 import type { Instrument, InstrumentMeta } from "@/lib/types";
 
 type Values = {
@@ -19,6 +27,7 @@ type Values = {
   capacity: string;
   capacity_unit: string;
   accuracy_class: string;
+  transportable: boolean;
   address: string;
   state_code: string;
   district_code: string;
@@ -37,6 +46,7 @@ function toValues(i: Instrument): Values {
     capacity: String(i.capacity),
     capacity_unit: i.capacity_unit,
     accuracy_class: i.accuracy_class ?? "",
+    transportable: i.transportable,
     address: i.address,
     state_code: i.state_code,
     district_code: i.district_code,
@@ -46,7 +56,7 @@ function toValues(i: Instrument): Values {
 }
 
 // Decimals go over the wire as strings so the backend's Decimal parsing is exact.
-function payload(v: Values): Record<string, string | null> {
+function payload(v: Values): Record<string, string | boolean | null> {
   const nullable = (s: string) => (s.trim() === "" ? null : s.trim());
   return {
     instrument_type: v.instrument_type,
@@ -56,6 +66,10 @@ function payload(v: Values): Record<string, string | null> {
     capacity: v.capacity.trim(),
     capacity_unit: v.capacity_unit,
     accuracy_class: nullable(v.accuracy_class),
+    // Spec 14: "Can the instrument be transported?" — never null (InstrumentUpdate rejects an
+    // explicit null for it, same as every other non-nullable field); always included so edit-mode
+    // diffing (below) can detect a change like any other boolean-vs-boolean comparison.
+    transportable: v.transportable,
     address: v.address,
     state_code: v.state_code,
     district_code: v.district_code,
@@ -83,6 +97,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           capacity: "",
           capacity_unit: "",
           accuracy_class: "",
+          transportable: true,
           address: "",
           state_code: user?.state_code ?? "",
           district_code: user?.district_code ?? "",
@@ -94,9 +109,32 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
+  // Spec 16: the optional richer category system, additive alongside the flat fields above.
+  // category_id/category_values are a paired nullable field on the backend — both null (no
+  // category assigned) or both set. Kept as separate state from `Values` because their shape
+  // (a number id + an arbitrary, category-schema-shaped JSON object) doesn't fit the flat
+  // string-keyed payload() below.
+  const [categoryId, setCategoryId] = useState<number | null>(initial?.category_id ?? null);
+  const [categoryValues, setCategoryValues] = useState<Record<string, unknown>>(
+    initial?.category_values ?? {},
+  );
+  const [categoryFieldErrors, setCategoryFieldErrors] = useState<Record<string, string>>({});
+
   useEffect(() => {
     getInstrumentMeta().then(setMeta, () => setMetaError(true));
   }, []);
+
+  const selectedCategory = useMemo(() => categoryById(meta, categoryId), [meta, categoryId]);
+
+  // Changing the category swaps in a fresh values object for the new schema — a newly-selected
+  // category has no prior values to preserve, but re-selecting the same one (e.g. after the
+  // search box re-renders the list) is a no-op that keeps whatever the user already filled in.
+  function handleCategoryChange(nextId: number | null) {
+    if (nextId === categoryId) return;
+    setCategoryId(nextId);
+    setCategoryFieldErrors({});
+    setCategoryValues(nextId === null ? {} : initCategoryValues(categoryById(meta, nextId)?.field_schema ?? []));
+  }
 
   const units = useMemo(
     () => meta?.types.find((t) => t.value === values.instrument_type)?.units ?? [],
@@ -127,20 +165,48 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
     event.preventDefault();
     setError(null);
     setFieldErrors({});
+
+    // Top-level required-field presence only — mirrors the backend's own validation scope
+    // exactly (spec 16 §7); see dynamic-field-renderer.tsx's validateCategoryValues for why.
+    const categoryErrs =
+      categoryId !== null ? validateCategoryValues(selectedCategory?.field_schema ?? [], categoryValues) : {};
+    setCategoryFieldErrors(categoryErrs);
+    if (Object.keys(categoryErrs).length > 0) {
+      setError("Please fix the highlighted fields.");
+      return;
+    }
+
     const body = payload(values);
-    let request: Record<string, string | null> = body;
+    let request: Record<string, unknown>;
     if (mode === "edit") {
       // PATCH only what changed; instrument_type is not editable.
       const before = payload(toValues(initial));
       request = Object.fromEntries(
         Object.entries(body).filter(([k, v]) => k !== "instrument_type" && v !== before[k]),
       );
+      // category_id/category_values must be PATCHed together (never one without the other) —
+      // only include the pair at all if it actually changed from the instrument's current one.
+      const initialCategoryId = initial.category_id;
+      const initialCategoryValues = initial.category_values ?? {};
+      const categoryPairChanged =
+        categoryId !== initialCategoryId ||
+        (categoryId !== null && JSON.stringify(categoryValues) !== JSON.stringify(initialCategoryValues));
+      if (categoryPairChanged) {
+        request.category_id = categoryId;
+        request.category_values = categoryId === null ? null : categoryValues;
+      }
       if (Object.keys(request).length === 0) {
         onSaved(initial);
         return;
       }
     } else {
       request = Object.fromEntries(Object.entries(body).filter(([, v]) => v !== null));
+      // Both existing instrument_type-only creation and category-driven creation stay possible:
+      // category_id/category_values are only sent at all when a category was actually chosen.
+      if (categoryId !== null) {
+        request.category_id = categoryId;
+        request.category_values = categoryValues;
+      }
     }
 
     setSubmitting(true);
@@ -165,6 +231,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
   // Never re-derive the lock rule client-side: disable exactly what the backend reports.
   const locked = new Set(mode === "edit" ? initial.locked_fields : []);
   const locationLocked = locked.has("address") || locked.has("latitude") || locked.has("longitude");
+  const categoryLocked = locked.has("category_id") || locked.has("category_values");
 
   if (metaError) {
     return (
@@ -271,6 +338,55 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           disabled={locked.has("accuracy_class")}
           error={fieldErrors.accuracy_class}
         />
+        <div className="flex flex-col justify-end gap-1.5 sm:col-span-2">
+          <Label htmlFor="transportable" className="flex min-h-9 items-center gap-2 font-normal">
+            <Checkbox
+              id="transportable"
+              checked={values.transportable}
+              disabled={locked.has("transportable")}
+              onCheckedChange={(next) => set("transportable", next === true)}
+            />
+            Can the instrument be transported?
+          </Label>
+          <p className="text-sm text-muted-foreground">
+            Yes routes verification to an office/test centre; no means it is verified on-site
+            (in-situ) where it stands. Applies to any application filed from this instrument.
+          </p>
+          {fieldErrors.transportable ? (
+            <p className="text-sm text-destructive">{fieldErrors.transportable}</p>
+          ) : null}
+        </div>
+      </fieldset>
+
+      <fieldset className="grid gap-4">
+        <legend className="mb-2 text-sm font-medium">Category (optional)</legend>
+        <p className="text-sm text-muted-foreground">
+          Pick one of the 33 instrument categories to capture its category-specific fields
+          alongside the details above. Leaving this unset still lets you register the instrument
+          with just the flat fields.
+        </p>
+        <CategoryPicker
+          categories={meta.categories}
+          value={categoryId}
+          onChange={handleCategoryChange}
+          disabled={categoryLocked}
+          error={fieldErrors.category_id}
+        />
+        {fieldErrors.category_values ? (
+          <Alert variant="destructive">
+            <AlertDescription>{fieldErrors.category_values}</AlertDescription>
+          </Alert>
+        ) : null}
+        {selectedCategory ? (
+          <DynamicFieldRenderer
+            fields={selectedCategory.field_schema}
+            values={categoryValues}
+            onChange={(key, value) => setCategoryValues((prev) => ({ ...prev, [key]: value }))}
+            errors={categoryFieldErrors}
+            disabled={categoryLocked}
+            className="rounded-lg border p-4"
+          />
+        ) : null}
       </fieldset>
 
       <fieldset className="grid gap-4 sm:grid-cols-2">

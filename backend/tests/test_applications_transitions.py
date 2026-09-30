@@ -52,7 +52,7 @@ def test_happy_path_submit_review_reject(client: TestClient, make_user, make_app
 
     res = _status(client, officer, app.id, "DOCUMENT_REVIEW")
     assert res.status_code == 200
-    assert set(res.json()["allowed_actions"]) == {"REJECTED", "SCHEDULED"}
+    assert set(res.json()["allowed_actions"]) == {"REJECTED", "SCHEDULED", "DOCUMENTS_DEFICIENT"}
 
     res = _status(client, officer, app.id, "REJECTED", note="Invoice is not legible")
     assert res.status_code == 200 and res.json()["status"] == "REJECTED"

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -88,6 +89,34 @@ export default function CertificateDetailPage() {
         <Alert variant="destructive">
           <AlertDescription>{actionError}</AlertDescription>
         </Alert>
+      ) : null}
+
+      {certificate.is_expiring_soon ? (
+        <p className="text-sm font-medium text-warning">
+          Expiring soon — a re-verification may be needed shortly.
+        </p>
+      ) : null}
+      {certificate.superseded_by_certificate_id ? (
+        <p className="text-sm text-muted-foreground">
+          This certificate has been superseded.{" "}
+          <Link
+            href={`/certificates/${certificate.superseded_by_certificate_id}`}
+            className="underline"
+          >
+            View the current certificate
+          </Link>
+        </p>
+      ) : null}
+      {certificate.supersedes_certificate_id ? (
+        <p className="text-xs text-muted-foreground">
+          Supersedes an earlier certificate.{" "}
+          <Link
+            href={`/certificates/${certificate.supersedes_certificate_id}`}
+            className="underline"
+          >
+            View it
+          </Link>
+        </p>
       ) : null}
 
       <div className="grid gap-4 rounded-lg border p-4 sm:grid-cols-[auto_1fr] sm:items-start">

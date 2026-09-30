@@ -18,13 +18,19 @@ from app.core.application_types import (
     DocumentType,
 )
 from app.core.config import get_settings
+from app.core.document_review_templates import DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
+from app.core.gatc_types import InspectionAssigneeRole
 from app.core.instrument_types import CapacityUnit, InstrumentType
+from app.core.payment_types import PAYMENT_STATUS_LABELS, PaymentStatus
 from app.core.roles import Role
+from app.core.verification_types import VERIFICATION_MODE_LABELS, VerificationMode
 from app.models.application import Application
+from app.models.document_review_checklist import DocumentReviewChecklistItem
 from app.models.user import User
 from app.schemas.certificate import CertificateOut
 from app.schemas.common import StrictModel
 from app.schemas.document import DocumentOut
+from app.schemas.payment import PaymentOut
 
 Notes = Annotated[str, StringConstraints(strip_whitespace=True, max_length=1000)]
 
@@ -52,10 +58,37 @@ class StatusChange(StrictModel):
     status: ApplicationStatus
     note: Notes | None = None
     scheduled_date: date | None = None  # required for, and only for, target SCHEDULED
+    # Spec 15: optional GATC routing, allowed only for target SCHEDULED (enforced in
+    # services/applications.py: transition(), mirroring scheduled_date's own restriction).
+    # Omitting both (the default) self-assigns the scheduling LM_OFFICER, exactly as before this
+    # step. Providing one without the other is rejected here, at the schema layer, before any
+    # DB-dependent check runs — mirrors InstrumentCreate/Update's category_id/category_values
+    # pairing (spec 16).
+    gatc_organization_id: uuid.UUID | None = None
+    gatc_user_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def gatc_pair_valid(self) -> Self:
+        if (self.gatc_organization_id is None) != (self.gatc_user_id is None):
+            raise ValueError(
+                "gatc_organization_id and gatc_user_id must both be provided, or both omitted"
+            )
+        return self
 
 
 class InspectionReschedule(StrictModel):
     scheduled_date: date
+
+
+class ReviewChecklistItemUpdate(StrictModel):
+    item_key: str
+    checked: bool
+
+
+class ReviewChecklistUpdate(StrictModel):
+    """Partial: only the entries present are applied; other rows are untouched."""
+
+    items: list[ReviewChecklistItemUpdate]
 
 
 class InstrumentSummary(BaseModel):
@@ -79,6 +112,10 @@ class ApplicationOut(BaseModel):
     organization_name: str
     state_code: str
     district_code: str
+    # Raw enum, nullable (spec 14): applications created before migration 0009 have no snapshot.
+    # Matches this schema's own convention for status/application_type — the raw value here,
+    # display labels served separately via ApplicationMeta.verification_modes.
+    verification_mode: VerificationMode | None
     business_notes: str | None
     submitted_at: datetime | None
     scheduled_date: date | None
@@ -107,6 +144,7 @@ class ApplicationOut(BaseModel):
             organization_name=a.organization.name,
             state_code=a.state_code,
             district_code=a.district_code,
+            verification_mode=a.verification_mode,
             business_notes=a.business_notes,
             submitted_at=a.submitted_at,
             scheduled_date=a.inspection.scheduled_date if a.inspection else None,
@@ -140,8 +178,22 @@ class InspectionOut(BaseModel):
     id: uuid.UUID
     scheduled_date: date
     assigned_officer_name: str
+    # Spec 15: which of the two assignable roles this is — raw enum, matching this schema's own
+    # convention for status/application_type/verification_mode (the value itself, not a label;
+    # LM_OFFICER/GATC need no *_LABELS dict, same precedent ChecklistResult already sets).
+    assignee_role: InspectionAssigneeRole
     submitted_at: datetime | None
     checklist_summary: ChecklistSummary | None
+
+
+class ReviewChecklistItemOut(BaseModel):
+    item_key: str
+    label: str
+    checked: bool
+
+    @classmethod
+    def from_model(cls, item: DocumentReviewChecklistItem) -> Self:
+        return cls(item_key=item.item_key, label=item.label, checked=item.checked)
 
 
 class ApplicationDetail(ApplicationOut):
@@ -151,7 +203,11 @@ class ApplicationDetail(ApplicationOut):
     allowed_actions: list[ApplicationStatus]
     inspection: InspectionOut | None
     certificate: CertificateOut | None
+    # Spec 12: `null` until POST /applications/{id}/mock-pay is first called (the row is created
+    # lazily, not at application creation) — informational only, never gates any transition below.
+    payment: PaymentOut | None
     can_reschedule: bool
+    review_checklist: list[ReviewChecklistItemOut]
 
     @classmethod
     def build(
@@ -161,6 +217,7 @@ class ApplicationDetail(ApplicationOut):
         allowed_actions: list[ApplicationStatus],
         *,
         checklist_summary: dict[str, int] | None = None,
+        review_checklist: list[DocumentReviewChecklistItem] | None = None,
     ) -> Self:
         present = {d.document_type for d in a.documents}
         required = REQUIREMENTS[a.application_type]
@@ -192,6 +249,7 @@ class ApplicationDetail(ApplicationOut):
                     id=a.inspection.id,
                     scheduled_date=a.inspection.scheduled_date,
                     assigned_officer_name=a.inspection.assigned_officer.full_name,
+                    assignee_role=a.inspection.assignee_role,
                     submitted_at=a.inspection.submitted_at,
                     checklist_summary=(
                         ChecklistSummary(
@@ -207,10 +265,14 @@ class ApplicationDetail(ApplicationOut):
                 else None
             ),
             certificate=CertificateOut.from_model(a.certificate) if a.certificate else None,
+            payment=PaymentOut.from_model(a.payment) if a.payment else None,
             # Scope already implies jurisdiction: reaching this point means the caller may read it.
             can_reschedule=(
                 a.status == ApplicationStatus.SCHEDULED and user.role == Role.LM_OFFICER
             ),
+            review_checklist=[
+                ReviewChecklistItemOut.from_model(i) for i in (review_checklist or [])
+            ],
         )
 
 
@@ -244,12 +306,22 @@ class SchedulingMeta(BaseModel):
     max_days_ahead: int
 
 
+class ReviewChecklistTemplateItem(BaseModel):
+    key: str
+    label: str
+
+
 class ApplicationMeta(BaseModel):
     application_types: list[ApplicationTypeMeta]
     statuses: list[LabelledValue]
     document_types: list[LabelledValue]
     limits: UploadLimits
     scheduling: SchedulingMeta
+    document_review_checklist: list[ReviewChecklistTemplateItem]
+    verification_modes: list[LabelledValue]
+    # Spec 12: PaymentStatus is a backend-owned enum (app/core/payment_types.py) the frontend must
+    # never hardcode, same rule every other enum on this schema already follows.
+    payment_statuses: list[LabelledValue]
 
     @classmethod
     def build(cls) -> Self:
@@ -276,4 +348,14 @@ class ApplicationMeta(BaseModel):
                 max_documents=MAX_DOCUMENTS,
                 allowed_content_types=list(ALLOWED_CONTENT_TYPES),
             ),
+            document_review_checklist=[
+                ReviewChecklistTemplateItem(key=i.key, label=i.label)
+                for i in DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
+            ],
+            verification_modes=[
+                LabelledValue(value=m, label=VERIFICATION_MODE_LABELS[m]) for m in VerificationMode
+            ],
+            payment_statuses=[
+                LabelledValue(value=p, label=PAYMENT_STATUS_LABELS[p]) for p in PaymentStatus
+            ],
         )

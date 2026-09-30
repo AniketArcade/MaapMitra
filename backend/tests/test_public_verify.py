@@ -19,11 +19,13 @@ FIELDS = {
     "certificate_number",
     "status",
     "instrument_type_label",
+    "instrument_uid",
     "manufacturer",
     "model",
     "serial_number",
     "valid_from",
     "valid_until",
+    "issued_by",
 }
 
 
@@ -47,11 +49,13 @@ def test_public_verify_success(client: TestClient, make_user, make_application) 
     assert body["certificate_number"] == cert["certificate_number"]
     assert body["status"] == "VALID"
     assert body["instrument_type_label"] == "Weighing scale"
+    assert body["instrument_uid"] == cert["instrument_uid"]
     assert body["manufacturer"] == cert["manufacturer"]
     assert body["model"] == cert["model"]
     assert body["serial_number"] == cert["serial_number"]
     assert body["valid_from"] == cert["valid_from"]
     assert body["valid_until"] == cert["valid_until"]
+    assert body["issued_by"] == officer.full_name
 
 
 def test_public_verify_not_found(client: TestClient) -> None:
@@ -93,6 +97,26 @@ def test_public_verify_revoked_beats_expired(
     res = client.get(f"/api/public/verify/{cert['certificate_number']}")
     assert res.status_code == 200, res.text
     assert res.json()["status"] == "REVOKED"
+
+
+def test_public_verify_superseded_status(client: TestClient, make_user, make_application) -> None:  # noqa: ANN001
+    """Spec 13: a superseded certificate's own `status` is the signal the public page shows —
+    no supersedes/superseded_by chain field is ever exposed here (see FIELDS above)."""
+    officer = make_user(Role.LM_OFFICER)
+    app = make_application(status="APPROVED", officer=officer)
+    cert = _issue(client, officer, app.id)
+
+    with SessionLocal() as s:
+        row = s.get(Certificate, cert["id"])
+        assert row is not None
+        row.status = CertificateStatus.SUPERSEDED
+        s.commit()
+
+    res = client.get(f"/api/public/verify/{cert['certificate_number']}")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "SUPERSEDED"
+    assert set(body.keys()) == FIELDS  # still exactly the authorized field set, nothing extra
 
 
 def test_public_verify_truly_public(client: TestClient, make_user, make_application) -> None:  # noqa: ANN001

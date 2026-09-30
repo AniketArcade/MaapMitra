@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 
 from app.core.application_types import TERMINAL_STATUSES, ApplicationStatus, ApplicationType
+from app.core.verification_types import VerificationMode
 from app.db.base import Base
 from app.db.mixins import Timestamps, UUIDPk
 from app.models.instrument import Instrument
@@ -41,6 +42,14 @@ class Application(UUIDPk, Timestamps, Base):
     # Snapshot of the instrument's location at creation (locked while the application is active).
     state_code: Mapped[str] = mapped_column(Text, nullable=False)
     district_code: Mapped[str] = mapped_column(Text, nullable=False)
+    # Spec 14: snapshot of instrument.transportable at creation (same "why" as the state/district
+    # snapshot above — the instrument's transportability could change later, but this application
+    # freezes whatever was true when it was filed). Nullable: applications created before
+    # migration 0009 have no snapshot to backfill (the whole point is it can't be reconstructed
+    # after the fact); every application created from here on always gets one.
+    verification_mode: Mapped[VerificationMode | None] = mapped_column(
+        Enum(VerificationMode, name="verification_mode")
+    )
     business_notes: Mapped[str | None] = mapped_column(Text)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(
@@ -62,6 +71,11 @@ class Application(UUIDPk, Timestamps, Base):
         lazy="raise", uselist=False, passive_deletes=True
     )
     certificate: Mapped["Certificate | None"] = relationship(  # noqa: F821
+        lazy="raise", uselist=False, passive_deletes=True
+    )
+    # Spec 12: created lazily by POST /applications/{id}/mock-pay, unlike inspection/certificate
+    # above (both created by the lifecycle itself) — most applications never get a row at all.
+    payment: Mapped["Payment | None"] = relationship(  # noqa: F821
         lazy="raise", uselist=False, passive_deletes=True
     )
 

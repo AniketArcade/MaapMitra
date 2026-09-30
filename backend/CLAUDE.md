@@ -107,6 +107,12 @@ Workflow for every schema change:
 | `0005` | inspection checklist (`inspection_checklist_items`, `inspection_measurements`, 3 new `inspections` columns, `checklist_result` enum, `document_type` gains `INSPECTION_EVIDENCE`) | 2026-09-30 (no seed changes; the field-inspection flow is driven live in the demo) |
 | `0006` | certificates (+ `certificate_number_seq`, `certificate_status` enum) | 2026-09-30 (no seed changes; issuance is driven live in the demo) |
 | `0007` | certificate reminders (`reminder_30d_sent_at`, `reminder_7d_sent_at`, both nullable `Date`) | 2026-09-30 (no seed changes; the expiry job is driven live in the demo) |
+| `0008` | document review checklist (`document_review_checklist_items`, `application_status` enum gains `DOCUMENTS_DEFICIENT`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/11-document-review-checklist.md`) |
+| `0009` | transportability and verification mode (`instruments.transportable` boolean, NOT NULL, `server_default(true())`; new `verification_mode` enum type; `applications.verification_mode`, nullable) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/14-transportability.md`) |
+| `0010` | certificate superseding (`certificate_status` enum gains `SUPERSEDED`; `certificates.supersedes_certificate_id` / `superseded_by_certificate_id`, both nullable self-referential FKs, `ON DELETE SET NULL`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/13-certificate-superseding.md`) |
+| `0011` | payments (`payments` table: `application_id` unique FK `ON DELETE CASCADE`, `amount` nullable `Numeric(10,2)`, new `payment_status` enum `NOT_PAID`/`PENDING`/`PAID` default `NOT_PAID`, `paid_at` nullable timestamptz) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/12-payments.md`) |
+| `0012` | instrument categories (`instrument_categories` table: smallint PK 1-33, `name`, `validity_months`, `field_schema` JSONB, seeded with 33 rows in this same migration; `instruments` gains nullable `category_id` smallint FK `ON DELETE SET NULL` + nullable `category_values` JSONB) | 🛑 **NOT YET APPLIED TO SUPABASE — AND MUST NOT BE, UNTIL THE USER HAS REVIEWED THE SEEDED CATEGORY CONTENT.** This is not the routine "written and tested locally, apply later" note every other row above carries — the 33 seeded rows are ported from a separate prototype repo's own invented-but-plausible fixture data (see `docs/specs/16-instrument-categories.md` for the full disclaimer and the category list) and need a **content** review, not just a code review, before this migration ever touches the real database. |
+| `0013` | GATC eligibility (`organizations.gatc_eligible_category_ids`, nullable JSONB array of `instrument_categories.id`, CHECK constrained to `type=GATC` orgs only) + `inspections.assignee_role` (new `inspection_assignee_role` enum, NOT NULL, backfilled `LM_OFFICER` for every pre-existing row) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/15-gatc-eligibility.md`) |
 
 ## Layering rules
 
@@ -121,16 +127,25 @@ Workflow for every schema change:
 - Lists return `Page[T]` (`{items, total, page, page_size}`) with `Annotated[PageParams, Depends()]` (page ≥1, page_size ≤100) and a stable order (`created_at desc, id`).
 - **Never let a client aggregate paged data itself** (counting `items` from a large `page_size` fetch is wrong past one page). Add a server-side stats/count endpoint that runs the same `scope_*` query grouped/counted in SQL — see `GET /applications/stats`.
 - Rules that need the stored row (e.g. PATCH merged-state checks) raise `Unprocessable(msg, field=...)`, which returns FastAPI's 422 list shape.
-- Enums, units and regions live in `core/instrument_types.py` and `core/regions.py`; application/document types in `core/application_types.py`. The frontend gets them from `GET /instruments/meta` and `GET /applications/meta`.
+- Enums, units and regions live in `core/instrument_types.py` and `core/regions.py`; application/document types in `core/application_types.py`; verification mode (spec 14) in its own sibling module `core/verification_types.py` — a routing concept computed from an instrument property but stored on the Application, not a fit for either existing file. The frontend gets them from `GET /instruments/meta` and `GET /applications/meta`.
 - **Row locks re-read:** every `with_for_update()` re-check uses `.execution_options(populate_existing=True)`. Otherwise the identity map returns the stale pre-lock copy.
 - **Audit-writing GETs commit in the service** (e.g. `GET /documents/{id}/url` writes `DOCUMENT_URL_ISSUED`).
 
 ## Data model
 
-Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications`, `documents`, `inspections`,
-`inspection_checklist_items`, `inspection_measurements`, `certificates`, `payments` (mocked), `audit_logs`
+Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `instrument_categories` (step 16,
+see below), `applications`, `documents`, `inspections`,
+`inspection_checklist_items`, `inspection_measurements`, `document_review_checklist_items`,
+`certificates`, `payments` (mocked, informational only — step 12, see below), `audit_logs`
 
 - `users`: DB check constraints tie `role` to `organization_id` (BUSINESS/GATC need one, officials must not) and require `state_code`/`district_code` for officials.
+- `organizations`: `gatc_eligible_category_ids` (step 15, migration `0013`, 🛑 not yet applied to
+  Supabase): nullable JSONB array of `instrument_categories.id` values, meaningful only for
+  `type=GATC` orgs (CHECK-constrained). `none_as_null=True` on the SQLAlchemy type — without it a
+  Python `None` writes as `'null'::jsonb`, not SQL `NULL`, which silently fails both the CHECK
+  constraint and `services/gatc.py: list_eligible()`'s own `IS NULL` filtering (caught by a real
+  Postgres `CheckViolation` in the first test run). No write endpoint exists yet — configured
+  directly in the database until a future org-management step (spec `docs/specs/15-gatc-eligibility.md`).
 - `refresh_tokens`: SHA-256 `token_hash` only, never the raw token.
 - `audit_logs`: append-only. Write rows through `services/audit.log(db, *, actor, action, entity_type, entity_id, organization_id, details, ip)` in the caller's transaction. Routers pass `ip=get_client_ip(request)`.
 - `instruments` (spec `docs/specs/02-instruments.md`, lock activated by `docs/specs/05-officer-dashboard.md`):
@@ -139,17 +154,76 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
   - Delete is blocked by `ON DELETE RESTRICT` once **any** application exists (→ 409).
   - **Locking:** `core/instrument_lock.py: locked_fields(active_status)` is the single source of truth, used by both the PATCH check and `InstrumentOut.locked_fields` (so the frontend disables exactly what the backend enforces — never re-derive the rule client-side). While a non-terminal application exists (DRAFT included), identity fields (manufacturer, model, serial_number, capacity, capacity_unit, accuracy_class, state_code, district_code) → 409. Once the application reaches SCHEDULED, INSPECTION or APPROVED, address/latitude/longitude lock too (409, a distinct message) — they stay editable through DRAFT/SUBMITTED/DOCUMENT_REVIEW. The lock lifts entirely at REJECTED or CERTIFICATE_ISSUED.
   - `InstrumentOut.active_application` (one LEFT JOIN); reported as `null` to officials while it's a DRAFT.
+  - `transportable` (spec `docs/specs/14-transportability.md`, migration `0009`): "Can the instrument be
+    transported?" Boolean, NOT NULL, `server_default(true())` (same pattern as `User.is_active`).
+    Defaults `true` on `InstrumentCreate` when omitted. Drives `Application.verification_mode`
+    (below) and joins `IDENTITY_LOCKED` — same reasoning as `state_code`/`district_code`: it's
+    snapshotted onto the Application at creation, so it locks for the same duration to keep the
+    instrument's live value from drifting out of sync with an in-progress application's frozen
+    snapshot.
+  - `category_id` / `category_values` (spec `docs/specs/16-instrument-categories.md`, migration
+    `0012`, 🛑 not yet applied to Supabase, content pending user review): an additive, optional,
+    richer category system that sits **alongside** `instrument_type`/`capacity`/`capacity_unit`/
+    `accuracy_class` above, not instead of them — every pre-existing instrument keeps
+    `category_id = NULL` and works entirely unaffected. `category_id` (nullable smallint FK ->
+    `instrument_categories.id`, `ON DELETE SET NULL`) and `category_values` (nullable JSONB, the
+    filled-in values keyed by each category's `field_schema` entry's `key`) are a **paired**
+    field: `InstrumentCreate`/`InstrumentUpdate` reject one being set without the other (see
+    `schemas/instrument.py: _category_pair_valid`/`category_fields_sent_together`). Both join
+    `IDENTITY_LOCKED` for the same "snapshotted, don't let it drift mid-application" reasoning as
+    `transportable`. Validation is **top-level required-field-presence only** (deliberate MVP
+    scope, see the spec's Decisions): `services/instruments.py: _validate_category()` checks that
+    every `field_schema` entry with `required: true` has a corresponding non-null key in
+    `category_values` — repeater-row contents, range-band (Qmin < Qt < Qmax) ordering, and
+    unit-option membership are explicitly **not** validated.
 - `applications` (spec `docs/specs/03-applications.md`):
   - `application_number` = `APP-{UTC year}-{nextval('application_number_seq'):06d}`, display only.
   - One active (non-terminal) application per instrument: partial unique index `ux_applications_active_instrument`.
   - `state_code`/`district_code` are a snapshot of the instrument's location (locked while active).
+  - `verification_mode` (spec `docs/specs/14-transportability.md`, migration `0009`): a snapshot of
+    `instrument.transportable` taken at creation (`verification_mode_for()`,
+    `app/core/verification_types.py`) — `transportable=True → OFFICE_TEST_CENTRE`,
+    `False → ON_SITE`. Nullable enum column: frozen once set, never re-derived, and applications
+    created before `0009` have no snapshot to backfill (the point of a snapshot is that it can't
+    be reconstructed after the fact). Served as the raw enum on `ApplicationDetail` (matching how
+    `status`/`application_type` are served); display labels live only in
+    `GET /applications/meta`'s `verification_modes`, never hardcoded client-side.
   - `application_status_history` is append-only and feeds the timeline (businesses can't read `audit_logs`).
   - **Officials never see DRAFT applications or their documents** (`scope_applications`).
   - `scheduled_date` on `ApplicationOut`/`ApplicationDetail.inspection` comes from a LEFT JOIN/`contains_eager` on `inspections`, never a per-row query.
 - `documents`: `storage_path` = `applications/{application_id}/{document_id}.{pdf|jpg|png}` (never a URL, never the user's filename). `content_type` is the **sniffed** type. Max 10 per application.
-- `inspections` (spec `docs/specs/05-officer-dashboard.md`, extended by `docs/specs/06-inspection-checklist.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign only in step 5: always the officer who scheduled it; also the only officer who may start/edit/submit the field inspection, step 6 D1). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` doubles as the "my inspections" list: `GET /applications?status=INSPECTION&sort=scheduled_asc`. Step 6 adds `overall_remarks` (text, null), `submitted_at` (timestamptz, null — the single source of truth for "this checklist is locked"), `submitted_by` (FK → users, `ON DELETE RESTRICT`, null).
+- `inspections` (spec `docs/specs/05-officer-dashboard.md`, extended by `docs/specs/06-inspection-checklist.md` and `docs/specs/15-gatc-eligibility.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign in step 5 — always the officer who scheduled it — **or**, since step 15, a specific `GATC`-role user the scheduling officer explicitly routed to; either way the only person who may start/edit/submit the field inspection, step 6 D1/step 15). `assignee_role` (step 15, migration `0013`, 🛑 not yet applied to Supabase): `inspection_assignee_role` enum (`LM_OFFICER`/`GATC`), `NOT NULL`, backfilled `LM_OFFICER` for every pre-existing row (a known fact, not a guess — see the spec's D4) — denormalized so reporting/dashboards never need a join to `users.role`; set once at assignment and never re-validated (safe: no endpoint anywhere ever mutates `users.role` after creation). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` doubles as the "my inspections" list: `GET /applications?status=INSPECTION&sort=scheduled_asc`. Step 6 adds `overall_remarks` (text, null), `submitted_at` (timestamptz, null — the single source of truth for "this checklist is locked"), `submitted_by` (FK → users, `ON DELETE RESTRICT`, null).
 - `inspection_checklist_items` / `inspection_measurements` (spec `docs/specs/06-inspection-checklist.md`): one row per `CHECKLIST_TEMPLATES`/`MEASUREMENT_TEMPLATES` entry for the instrument's type (`core/inspection_templates.py`, ASSUMPTION — illustrative demo content), **snapshotted** when the inspection starts (`SCHEDULED → INSPECTION`) so a later template edit never changes an in-progress or already-submitted inspection. `inspection_checklist_items.result` is a nullable `checklist_result` enum (`PASS`/`FAIL`/`NA`); `inspection_measurements.expected_value` is `instrument.capacity * fraction` computed at start time, `observed_value` filled by the officer. Both `ON DELETE CASCADE` from `inspections`, unique on `(inspection_id, item_key)` / `(inspection_id, label)`.
-- `certificates` (spec `docs/specs/08-certificate-pdf-qr.md`): one row per application (`application_id` unique FK, `ON DELETE RESTRICT`), created by `services/certificates.py: issue()` — never through `transition()`. `certificate_number` = `LM-CERT-{UTC year}-{nextval('certificate_number_seq'):06d}`. `snapshot` (JSONB) freezes the instrument/business/approver fields shown on the PDF at issuance time — a deliberate JSONB blob, not relational rows like the checklist (it's one immutable bundle written once and always read whole, the opposite case from spec 06's checklist items), needed because the instrument unlocks (editable again) the moment the application reaches this terminal status. `valid_from`/`valid_until` = issue date + `CERTIFICATE_VALIDITY_YEARS` (Settings field, default 2 — ASSUMPTION, not a real Legal Metrology rule). `status` starts `VALID`; the expiry job (step 10) is the only thing that ever moves it, and only to `EXPIRED` — `REVOKED` has no writer anywhere yet (no revoke action exists). `pdf_path` = `certificates/{id}.pdf`, stored in the same single `SUPABASE_BUCKET` as documents (no new bucket). `data_hash`: SHA-256 hex of a fixed pipe-joined string of the certificate's own fields (`app/services/certificates.py: _data_hash()`) — a tamper-evidence fingerprint, not a cryptographic file signature (root `CLAUDE.md`'s "hash-based in MVP" decision). No `qr_token` column: the QR/public URL encodes `certificate_number` directly (see QR section below). `reminder_30d_sent_at`/`reminder_7d_sent_at` (migration `0007`, nullable `Date`): the expiry job's idempotency mechanism (see Expiry job below) — `NULL` means "not yet sent," never re-derived from a log.
+- `document_review_checklist_items` (spec `docs/specs/11-document-review-checklist.md`,
+  migration `0008`): one row per `DOCUMENT_REVIEW_CHECKLIST_TEMPLATE` entry (`core/document_review_templates.py`,
+  ASSUMPTION — illustrative demo content, a single generic list, not per-instrument-type),
+  **snapshotted** when the application enters `DOCUMENT_REVIEW` and **reset** (`checked = false`,
+  not recreated) on a later re-entry via the `DOCUMENTS_DEFICIENT → SUBMITTED → DOCUMENT_REVIEW`
+  loop. `ON DELETE CASCADE` from `applications`, unique on `(application_id, item_key)`.
+  `DOCUMENT_REVIEW → SCHEDULED` is blocked (409) until every row's `checked` is `true`.
+- `certificates` (spec `docs/specs/08-certificate-pdf-qr.md`): one row per application (`application_id` unique FK, `ON DELETE RESTRICT`), created by `services/certificates.py: issue()` — never through `transition()`. `certificate_number` = `LM-CERT-{UTC year}-{nextval('certificate_number_seq'):06d}`. `snapshot` (JSONB) freezes the instrument/business/approver fields shown on the PDF at issuance time — a deliberate JSONB blob, not relational rows like the checklist (it's one immutable bundle written once and always read whole, the opposite case from spec 06's checklist items), needed because the instrument unlocks (editable again) the moment the application reaches this terminal status. `valid_from`/`valid_until` = issue date + `CERTIFICATE_VALIDITY_YEARS` (Settings field, default 2 — ASSUMPTION, not a real Legal Metrology rule). `status` starts `VALID`; the expiry job (step 10) is the only thing that ever moves it to `EXPIRED`, and `issue()` itself is the only thing that ever moves an *older* certificate to `SUPERSEDED` (step 13, see below) — `REVOKED` has no writer anywhere yet (no revoke action exists). `pdf_path` = `certificates/{id}.pdf`, stored in the same single `SUPABASE_BUCKET` as documents (no new bucket). `data_hash`: SHA-256 hex of a fixed pipe-joined string of the certificate's own fields (`app/services/certificates.py: _data_hash()`) — a tamper-evidence fingerprint, not a cryptographic file signature (root `CLAUDE.md`'s "hash-based in MVP" decision). No `qr_token` column: the QR/public URL encodes `certificate_number` directly (see QR section below). `reminder_30d_sent_at`/`reminder_7d_sent_at` (migration `0007`, nullable `Date`): the expiry job's idempotency mechanism (see Expiry job below) — `NULL` means "not yet sent," never re-derived from a log. `supersedes_certificate_id`/`superseded_by_certificate_id` (migration `0010`, spec `docs/specs/13-certificate-superseding.md`): nullable self-referential FKs, `ON DELETE SET NULL`, both `NULL` for every certificate issued before `0010` (no backfill — same "an honest NULL beats a fabricated value" reasoning as spec 14's `verification_mode`). Set only by `issue()`, in the same transaction as the new row's insert.
+
+- `payments` (spec `docs/specs/12-payments.md`, migration `0011`): one row per application
+  (`application_id` unique FK, `ON DELETE CASCADE` — unlike `certificates`' `RESTRICT`, since a
+  mocked payment has no independent reason to outlive its application and an application can still
+  be deleted while `DRAFT`), created **lazily** by `POST /applications/{id}/mock-pay` — unlike
+  `inspections`/`certificates` (created by the lifecycle itself the instant an application reaches
+  a given status), most applications never get a `payments` row at all;
+  `ApplicationDetail.payment` is `null` until the first mock-pay call, not a zero-value row.
+  `amount` (`Numeric(10,2)`, nullable): no real payment gateway or fee schedule exists in this MVP
+  (ASSUMPTION), so `mock_pay()` never sets it — left for a real integration to populate later.
+  `status` (`payment_status` enum: `NOT_PAID`/`PENDING`/`PAID`, default `NOT_PAID`) and `paid_at`
+  (nullable timestamptz, set only once `status` becomes `PAID`). **This table is purely
+  informational — deliberately, by explicit user decision, not an oversight:** no status
+  transition in `services/applications.py: ALLOWED_TRANSITIONS`/`transition()` reads or checks
+  `payments` in any way; an application can reach `CERTIFICATE_ISSUED` with no `payments` row at
+  all. `mock_pay()` (`services/payments.py`) creates the row directly with `status=PAID` in a
+  single step (no gateway to await, so an intermediate `PENDING` write-then-flip would add a state
+  transition with no observable difference) and is idempotent: it locks the parent application row
+  first, so two racing calls for the same application can never both insert — the second always
+  sees the first's already-committed row. No `scope_payments()` helper exists: a payment is only
+  ever reached through its owning application (`applications_service.load()`'s existing scope), the
+  same reasoning `scope_certificates()`/`scope_inspections()` already use.
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
   - instrument `instrument_uid`: `LM-JH-DHN-000123`
@@ -161,7 +235,7 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
 
 ```
 DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
-      → APPROVED | REJECTED → CERTIFICATE_ISSUED
+                  ⇄ DOCUMENTS_DEFICIENT       → APPROVED | REJECTED → CERTIFICATE_ISSUED
 ```
 
 - Enforce it through an `ALLOWED_TRANSITIONS` map in `services/applications.py`: `(from, to) → Edge(roles, enabled)`. Later steps flip `enabled`.
@@ -169,13 +243,234 @@ DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
 - Enabled in step 5: DOCUMENT_REVIEW → SCHEDULED (LM_OFFICER, requires `scheduled_date`; §"Scheduling" below).
 - Enabled in step 6: SCHEDULED → INSPECTION (LM_OFFICER, **and only the assigned officer** — `Edge(roles, enabled)` alone can't express that identity check, so `transition()` adds it explicitly; §"Field inspection" below).
 - Enabled in step 7: INSPECTION → APPROVED / REJECTED (any in-scope LM_OFFICER, **not** assigned-officer-locked — unlike the checklist itself, deliberately, since it's frozen by then; gated on `inspections.submitted_at` being set; §"Approve/Reject" below).
+- Enabled in step 11: DOCUMENT_REVIEW → DOCUMENTS_DEFICIENT (LM_OFFICER, `note` 10–1000 chars, same length rule as REJECTED's own `REJECT_NOTE_MIN` but a sibling `DEFICIENCY_NOTE_MIN` constant), DOCUMENTS_DEFICIENT → SUBMITTED (BUSINESS, the resubmit action — no extra validation). DOCUMENTS_DEFICIENT is **not terminal**; §"Document review checklist" below.
 - `PATCH /applications/{id}/status` evaluation order: out of scope → 404; not an edge → 409 `Invalid status change`; wrong role → 403; not enabled → 409 `This action is not available yet`; edge rules → 409/422; apply (row lock, history row, audit row, one transaction).
 - `ApplicationDetail.allowed_actions` lists the enabled edges the caller's role may take (requirements not considered).
 - The status PATCH endpoint validates against that map and the caller's role. It never sets an arbitrary status.
 - **APPROVED → CERTIFICATE_ISSUED happens in the same DB transaction** as certificate creation.
-- REJECTED is terminal. Re-verification means a new application.
+- REJECTED is terminal. Re-verification means a new application. DOCUMENTS_DEFICIENT is the one
+  non-terminal "dead end" fix: the business resubmits into SUBMITTED, not a new application.
 
-Certificate status: `VALID` · `EXPIRED` · `REVOKED`
+### Document review checklist (step 11, spec `docs/specs/11-document-review-checklist.md`)
+- `document_review_checklist_items` (`app/models/document_review_checklist.py`, ASSUMPTION —
+  illustrative demo content, `core/document_review_templates.py`): one row per
+  `DOCUMENT_REVIEW_CHECKLIST_TEMPLATE` entry (a single generic 8-item list, not per-`InstrumentType`
+  like the inspection checklist — document review checks the submission as a whole), unique on
+  `(application_id, item_key)`.
+- **Snapshotted when the application enters `DOCUMENT_REVIEW`** (`transition()`, mirroring spec 06's
+  inspection-checklist snapshot timing): rows are created once; if the application later cycles
+  `DOCUMENTS_DEFICIENT → SUBMITTED → DOCUMENT_REVIEW` again, the existing rows are **reset**
+  (`checked = false`), never recreated — `item_key`/`label` stay snapshotted from the first pass
+  (a later template edit never changes an application already under review), but the officer must
+  re-verify every item against the resubmission.
+- `PATCH /api/applications/{id}/review-checklist` (LM_OFFICER only, application must be
+  `DOCUMENT_REVIEW`; 409 otherwise) toggles individual items — same partial-save shape as
+  `PATCH /api/inspections/{id}` (unknown `item_key` → 422, no audit row per call).
+- **`DOCUMENT_REVIEW → SCHEDULED` is additionally gated**: 409 `"Document review checklist
+  incomplete: …"` unless every row for the application has `checked = true` — mirrors the "all
+  required documents present" gate on `DRAFT → SUBMITTED`.
+- `ApplicationDetail.review_checklist` and `GET /applications/meta`'s
+  `document_review_checklist` (the template) follow the existing checklist-template meta pattern
+  (`GET /inspections/meta`'s `checklist_templates`) — the frontend never hardcodes the list.
+- Audit action: `DOCUMENT_REVIEW_STARTED` (`details.checklist_item_count`, `details.reset`).
+
+### Transportability and verification mode (step 14, spec `docs/specs/14-transportability.md`)
+- `instruments.transportable` ("Can the instrument be transported?") defaults `true` on
+  `InstrumentCreate` when omitted and joins `IDENTITY_LOCKED` (locked while any non-terminal
+  application exists) — same reasoning as `state_code`/`district_code`: it's snapshotted onto the
+  Application at creation, so it locks for the same duration.
+- `applications.verification_mode` is set once, in `services/applications.py: create()`, via
+  `verification_types.verification_mode_for(instrument.transportable)`:
+  `transportable=True → OFFICE_TEST_CENTRE`, `False → ON_SITE`. Never re-derived afterward — a
+  later `PATCH /instruments/{id}` changing `transportable` (only reachable once the instrument
+  unlocks) never touches any existing application's `verification_mode`.
+- `GET /applications/meta`'s `verification_modes` (`[{value, label}, ...]`) is the only place the
+  display labels are served — `ApplicationDetail.verification_mode` itself is the raw enum,
+  matching `status`/`application_type`'s own convention.
+- No new endpoint: `transportable` rides the existing `POST/PATCH /instruments` and
+  `InstrumentOut`; `verification_mode` rides the existing `ApplicationDetail`/`ApplicationOut`.
+
+### Certificate superseding + expiring-soon (step 13, spec `docs/specs/13-certificate-superseding.md`)
+- `services/certificates.py: issue()` now also supersedes the instrument's previous certificate,
+  if one exists and isn't already `SUPERSEDED`, in the **same transaction** as the new
+  certificate's insert (no second commit): look up the most recent certificate for the same
+  `instrument_id` (via the application → instrument join), lock it with `with_for_update(of=
+  Certificate)` under the same `populate_existing=True` discipline every other re-check lock in
+  this function uses, set its `status = SUPERSEDED` and `superseded_by_certificate_id`, and set
+  the new row's `supersedes_certificate_id`. A `db.flush()` runs between `db.add(certificate)` and
+  the previous row's update — both FK values are plain client-generated UUIDs, not ORM
+  relationships, so SQLAlchemy's unit-of-work won't otherwise order the `INSERT` before the
+  `UPDATE`, and Postgres's (non-deferred) FK constraint rejects the reverse order.
+- `core/certificate_status.py: is_expiring_soon(status, valid_until, *, today)` — an **additive
+  sibling** to `effective_status()`, not a change to it: `True` only when `effective_status()`
+  already reads `VALID` and `valid_until <= today + EXPIRY_REMINDER_30D_DAYS`, the same threshold
+  `services/admin.py`/`services/certificates.py: expiry_check()` already use. `effective_status()`
+  itself does **not** get a `SUPERSEDED`-wins branch — it falls through the same
+  "`valid_until < today` → `EXPIRED`" rule every non-`REVOKED` status already gets, exactly as
+  before this step; see the spec's D3 for why that was a hard constraint, not an oversight.
+- `CertificateOut` gains `supersedes_certificate_id`/`superseded_by_certificate_id` (raw
+  `uuid.UUID | None`, not nested refs — this schema already exposes `application_id` the same
+  flat way) and `is_expiring_soon: bool`.
+- `AdminCertificateStats` (`GET /admin/certificates/stats`) gains a `superseded` count bucket,
+  populated from the same grouped-by-status query already backing `valid`/`expired`/`revoked`.
+- **`PublicVerifyOut` gains exactly two fields** — `instrument_uid` and `issued_by` (from the
+  snapshot's existing `approved_by_name`) — under this step's explicit authorization to deviate
+  from spec 09 §5's "complete field set" wording (that schema's own docstring says "never add a
+  field here without checking spec 09 §5/§10 D4 first"; this is that check, recorded here and in
+  spec 13's own Decisions section). The supersede chain and `is_expiring_soon` were deliberately
+  **not** added to the public schema: a superseded certificate's own `status` becoming
+  `SUPERSEDED` is already the actionable signal a public verifier needs, and exposing either would
+  mean leaking an internal certificate id or a nuance aimed at the certificate holder, not the
+  public, for no new information `status` doesn't already carry. See §5 of spec 13 for the full
+  reasoning.
+
+Certificate status: `VALID` · `EXPIRED` · `REVOKED` · `SUPERSEDED` (step 13)
+
+### Payments — mocked, informational only (step 12, spec `docs/specs/12-payments.md`)
+- Resolves the long-open "Payments: mocked in MVP (`payments` table only)" decision (see
+  **Open decisions** below): the table plus a mock-pay action exist so the concept is visible in
+  the product, but **payment status gates nothing**. This was an explicit user decision, not
+  something left unfinished — `services/applications.py: ALLOWED_TRANSITIONS`/`transition()` is
+  untouched by this step; a test (`tests/test_payments.py::test_payment_never_gates_the_lifecycle`)
+  proves an application reaches `CERTIFICATE_ISSUED` with no `payments` row ever created.
+- `POST /api/applications/{id}/mock-pay` (`app/routers/applications.py`, `Owner` = `BUSINESS`
+  only) → `services/payments.py: mock_pay()`. Org scoping is inherited entirely from
+  `applications_service.load()` (out-of-org business → 404, never 403, same as every other
+  endpoint) — no separate `scope_payments()` helper, since a payment is only ever reached through
+  its owning application (same reasoning `scope_certificates()`/`scope_inspections()` use).
+- **Create-vs-upsert:** looks up the existing `Payment` row (if any) after locking the parent
+  `Application` row, and either inserts a new one or updates it — never both in the same call.
+  Idempotent by lock ordering, not a pre-check: two racing mock-pay calls for the same application
+  serialize on the application row lock, so the second always sees the first's committed row.
+  Already-`PAID` is a safe no-op (`paid_at` is left exactly as first set).
+- **Single-step, direct to `PAID`** (not `PENDING` then flipped): no real gateway exists to await,
+  so an intermediate write would add a state transition with no observable difference to any
+  caller. `PENDING` exists in the enum for a future real integration, but this action never
+  produces it.
+- **`amount` is left `null`/unset by `mock_pay()`** (ASSUMPTION): no fee schedule or real gateway
+  exists in this MVP to derive a number from; the column exists so a future real integration can
+  populate it without a schema change.
+- `ApplicationDetail.payment: PaymentOut | None` (`app/schemas/payment.py`) is `null` until the
+  first mock-pay call (the row is created lazily, not at application creation) — not exposed on
+  `ApplicationOut`, no dedicated `GET` endpoint (nothing to fetch independently; it's only ever
+  read alongside its application).
+- `GET /applications/meta`'s `payment_statuses` (`[{value, label}, ...]`) is the only place the
+  display labels are served (`app/core/payment_types.py: PAYMENT_STATUS_LABELS`) — the frontend
+  must never hardcode them, same rule every other backend-owned enum here follows.
+- Audit action: `PAYMENT_MOCKED` (`entity_type="application"`, `details.status`,
+  `details.created`).
+
+### Instrument categories (step 16, spec `docs/specs/16-instrument-categories.md`)
+
+🛑 **Migration `0012` is NOT applied to Supabase and must not be until a human reviews the
+seeded category content** (names, fields, options, units) — see the migration table above and the
+spec doc for the full disclaimer. This is content review, not just code review.
+
+- `instrument_categories` (new table): 33 rows, `id` a **smallint primary key 1-33** (not the
+  usual `UUIDPk` — a small, fixed, numbered reference set, mirrored from a separate prototype
+  repo's own stable category numbering), `name`, `validity_months` (mock; never used to compute
+  real legal validity, same caveat every other mock validity value in this codebase carries),
+  `field_schema` (JSONB array of field definitions — see `app/schemas/instrument_category.py:
+  CategoryFieldSchema` for the exact snake_case shape: `key, label, type, required, unit,
+  unit_options, options, presets, repeater_label, repeater_fields, min, max, help_text`).
+  **Seeded directly in migration `0012`** (`op.bulk_insert`), not via `app/seed.py`/
+  `database/seed/`: this is reference/taxonomy data the app needs to function in every
+  environment (like `app/core/regions.py`'s `REGIONS`, but promoted to a real table), not
+  demo-only content — it must not be gated behind `app/seed.py`'s `ENV=production` guard.
+- `instruments.category_id` (nullable smallint FK -> `instrument_categories.id`, `ON DELETE SET
+  NULL`) / `instruments.category_values` (nullable JSONB, keyed by each category's field
+  `key`s): fully **additive** alongside `instrument_type`/`capacity`/`capacity_unit`/
+  `accuracy_class` — every pre-`0012` instrument keeps `category_id = NULL` and works entirely
+  unaffected; no backfill or mapping from the old enum onto the new categories was attempted.
+- **Paired, not independent**: `InstrumentCreate`/`InstrumentUpdate` reject `category_id` being
+  set without `category_values` (or vice versa) — `schemas/instrument.py:
+  _category_pair_valid()`/`category_fields_sent_together()`. Both are in `NULLABLE_FIELDS`, so an
+  explicit `null` on either is allowed and clears the category assignment entirely (both together,
+  never one alone).
+- **Validation scope — a deliberate MVP simplification, not an oversight**:
+  `services/instruments.py: _validate_category()` checks only that every `field_schema` entry
+  with `required: true` has a corresponding **non-null top-level key** in `category_values`.
+  Repeater-row contents (e.g. at least one weight in category 1's denominations), range-band
+  ordering (Qmin < Qt < Qmax, categories 17/26), and unit-option membership (e.g. rejecting a
+  `unit` outside a field's `unit_options`) are explicitly **not** validated by this step.
+- **`category_id`/`category_values` join `IDENTITY_LOCKED`** (`core/instrument_lock.py`) — same
+  reasoning as `transportable` (spec 14): an in-progress application's understanding of "what kind
+  of instrument is this" shouldn't have the underlying instrument's category silently change while
+  a non-terminal application exists.
+- `GET /instruments/meta`'s `categories` entry (`[{id, name, validity_months, field_schema}, ...]`)
+  is read live from the `instrument_categories` table (`app/routers/instruments.py: meta()`,
+  the one query added to that endpoint), not from a Python constant like `types`/`regions` on the
+  same response — the whole point of a real table is that a human can review/edit the category
+  content as data, without a code deploy, once this migration is eventually applied. A future
+  frontend's `DynamicFieldRenderer` reads this endpoint; it must never import a static category
+  list of its own.
+- No new endpoint. `category_id`/`category_values` ride the existing `POST/PATCH /instruments`
+  request/response schemas, exactly like spec 14's `transportable`.
+
+### GATC eligibility + allocation (step 15, spec `docs/specs/15-gatc-eligibility.md`)
+
+🛑 **Migration `0013` is NOT applied to Supabase.** Resolves the root `CLAUDE.md`'s "GATC workflow
+depth: minimal" open decision as **minimal but real**: a `GATC`-role user becomes a genuine,
+category-gated `assigned_officer_id` on an `Inspection`, then flows through the exact same
+inspection/checklist/measurement/approve-reject machinery `LM_OFFICER` already uses — nothing is
+duplicated or forked for GATC.
+
+- `organizations.gatc_eligible_category_ids` / `inspections.assignee_role`: see the Data model
+  section above.
+- `GET /api/gatc/eligible?category_id=<id>` (`LM_OFFICER` only — the sole role that ever
+  schedules): GATC organizations, scoped to the caller's own jurisdiction
+  (`services/scoping.py: scope_organizations()`, mirrors `scope_instruments()`'s state/district
+  rule applied to `Organization` instead of `Instrument`), whose `gatc_eligible_category_ids`
+  contains `category_id`. `BUSINESS` is deliberately excluded (a business never chooses its own
+  routing; the list would leak GATC org names/jurisdictions with no action the caller could take)
+  and so are admin roles (they don't schedule; this is a live operational lookup, not a reporting
+  surface).
+- `GET /api/gatc/{organization_id}/users` (`LM_OFFICER` only): the active `GATC`-role users of one
+  organization, so the officer can name a specific person, not just an org — mirrors
+  `assigned_officer_id`'s existing "a specific person" semantics (spec 06 D1). Out-of-scope/
+  non-GATC org → 404, the ordinary GET-by-id convention.
+- `DOCUMENT_REVIEW → SCHEDULED` extended: `StatusChange` gains optional, paired
+  `gatc_organization_id`/`gatc_user_id`. Omitting both self-assigns the scheduling `LM_OFFICER`,
+  **completely unchanged** from before this step. Providing both routes to that specific GATC user
+  instead, via `services/gatc.py: resolve_gatc_assignment()`, which enforces (a) the org is
+  `type=GATC` and in the officer's own jurisdiction, (b) the application's *instrument* has a
+  non-null `category_id` present in that org's `gatc_eligible_category_ids` (an old-style,
+  pre-spec-16 application with no category can never use GATC routing), and (c) the application's
+  `verification_mode == OFFICE_TEST_CENTRE` (an `ON_SITE` application can never route to a GATC
+  test centre). A bad/nonexistent reference (unknown org/user, wrong org type, wrong jurisdiction,
+  inactive user, wrong org for that user) → 422; a legitimate reference blocked by a business rule
+  (category mismatch, `ON_SITE` mode) → 409 — see the spec's §5 for the full reasoning on this
+  split.
+- `SCHEDULED → INSPECTION`, `INSPECTION → APPROVED`, `INSPECTION → REJECTED` all gain `GATC` in
+  their `ALLOWED_TRANSITIONS` role set — no other change: the existing "must be the assigned
+  officer specifically" identity check (keyed on `assigned_officer_id == caller.id`, already
+  role-agnostic) and the existing "any in-scope officer may approve/reject once the checklist is
+  submitted" logic both generalize to GATC with zero further code changes.
+- `scope_applications()` gains a `GATC` branch — deliberately the **narrowest** of any role: not
+  jurisdiction-wide like `LM_OFFICER`, not org-wide like `BUSINESS`, but exactly the one
+  application (if any) this specific person is the `assigned_officer_id` of
+  (`Application.inspection.has(Inspection.assigned_officer_id == user.id)`, a correlated `EXISTS`,
+  never a join, so it can't collide with another caller path's own join to `Inspection`). A
+  consequence of this narrowness: "any in-scope GATC user" for approve/reject mechanically reduces
+  to "the one assigned GATC user" — no extra code enforces that, it falls out of the scoping rule.
+- **Router-level plumbing, not a role-set shortcut:** simply adding `GATC` to the existing `Reader`
+  dependencies on `GET/PATCH /applications/{id}...`/`GET/PATCH/POST /inspections/{id}...` would flip
+  an *unrelated* GATC caller's status from the pre-existing, test-pinned `403` to `404` (since
+  `scope_applications`'s "out of scope → 404" convention would then run for a role those endpoints
+  hadn't previously admitted at all). Instead, `routers/applications.py:
+  _reader_or_assigned_gatc()` and the analogous pair in `routers/inspections.py` check the path's
+  own `application_id`/`inspection_id` directly (`services/gatc.py:
+  is_assigned_gatc_for_application()`/`is_assigned_gatc_for_inspection()`) before falling through
+  to the original `Forbidden`. Every pre-existing role's behavior — and every pre-existing RBAC
+  test — is untouched; only the one specifically assigned GATC user is newly admitted, and only for
+  that one application/inspection. `GET /applications` (list), `GET /applications/stats`, and
+  evidence-photo upload/delete are deliberately left untouched (flat 403 for GATC, unchanged) —
+  none has a per-request id to gate on the way the endpoints above do, and evidence photos are
+  optional (a GATC inspection completes fully without them).
+- `InspectionOut`/`InspectionDetail` gain `assignee_role` (raw enum, no `*_LABELS` dict — same
+  precedent `ChecklistResult` already sets) alongside the existing assignee info.
+- No new audit action: `INSPECTION_SCHEDULED`'s existing `details` gains `assignee_role` and
+  `assigned_officer_id`.
 
 ### Scheduling (step 5, spec `docs/specs/05-officer-dashboard.md`)
 - `today()` in `core/clock.py` is the current date in `APP_TIMEZONE` (default `Asia/Kolkata`, ASSUMPTION), built on a separate `now_utc()` so tests can freeze time via `monkeypatch.setattr(clock, "now_utc", ...)` — there's no freezegun dependency. A UTC-only check would reject valid IST dates for up to 5h30m around midnight.
@@ -256,7 +551,7 @@ Base `/api`. REST + JSON.
 GET   /api/health                # liveness; ?db=true also pings DB (503 if down)
 POST  /api/auth/{login,register,refresh,logout}   GET /api/auth/me
 POST  /api/users                 # SUPER_ADMIN only; creates officials
-GET   /api/instruments/meta      # types, units, accuracy classes, regions (any logged-in user)
+GET   /api/instruments/meta      # types, units, accuracy classes, regions, categories (step 16) (any logged-in user)
 CRUD  /api/instruments           # write: BUSINESS (own org); read: + officials in jurisdiction; GATC 403
 CRUD  /api/applications          PATCH /api/applications/{id}/status
 POST  /api/documents             GET   /api/documents/{id}/url     # signed URL
@@ -264,23 +559,31 @@ GET   /api/inspections/meta      GET   /api/inspections/{id}
 PATCH /api/inspections/{id}      POST  /api/inspections/{id}/submit
 GET   /api/certificates/{id}     GET   /api/certificates/{id}/pdf
 POST  /api/applications/{id}/certificate   # LM_OFFICER only; issues a certificate while APPROVED
+POST  /api/applications/{id}/mock-pay      # BUSINESS (owner) only; mocked, informational-only payment (step 12)
 POST  /api/jobs/expiry-check     # requires X-Cron-Secret header, no rate limit (step 10)
-GET   /api/admin/certificates/stats            # ADMIN_ROLES; {valid, expiring_soon, expired, revoked}
+GET   /api/admin/certificates/stats            # ADMIN_ROLES; {valid, expiring_soon, expired, revoked, superseded}
 GET   /api/admin/certificates/expiring-soon    # ADMIN_ROLES; Page[CertificateOut], valid_until asc
 GET   /api/public/verify/{certificate_number}                     # no auth
-GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}
+GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}, document_review_checklist (step 11), verification_modes (step 14), payment_statuses (step 12)
 CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
-GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 8 statuses zero-filled
+GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 9 statuses zero-filled (step 11 adds DOCUMENTS_DEFICIENT)
 GET   /api/applications?sort=      # created_desc (default) | scheduled_asc
 PATCH /api/applications/{id}/inspection   # LM_OFFICER only; reschedule while SCHEDULED
+PATCH /api/applications/{id}/review-checklist   # LM_OFFICER only, DOCUMENT_REVIEW only; toggle document-review checklist items (step 11)
 DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSPECTION evidence (step 6)
+GET   /api/gatc/eligible          # LM_OFFICER only; ?category_id=<id>, jurisdiction-scoped GATC orgs (step 15)
+GET   /api/gatc/{organization_id}/users   # LM_OFFICER only; active GATC-role users of one org (step 15)
 ```
 
-### Public verify (step 9, spec `docs/specs/09-public-verify.md`)
-- `PublicVerifyOut` (`app/schemas/public.py`) is the **complete** field list: `certificate_number`,
-  `status`, `instrument_type_label`, `manufacturer`, `model`, `serial_number`, `valid_from`,
-  `valid_until`. No owner PII (`organization_name`, `address`), no documents, no internal IDs
-  (`id`, `application_id`), no `pdf_path`/`data_hash`. Never link to the certificate PDF from the
+### Public verify (step 9, spec `docs/specs/09-public-verify.md`; field list extended by step 13, spec `docs/specs/13-certificate-superseding.md`)
+- `PublicVerifyOut` (`app/schemas/public.py`) field list: `certificate_number`, `status`,
+  `instrument_type_label`, `instrument_uid`, `manufacturer`, `model`, `serial_number`,
+  `valid_from`, `valid_until`, `issued_by`. The last two spec 09 §5 did not originally include —
+  step 13 added them under explicit authorization to deviate from spec 09 §5's "complete field
+  set" wording (see that step's spec doc §5 and the "Certificate superseding" subsection above for
+  the full reasoning). No owner PII (`organization_name`, `address`), no documents, no internal
+  database IDs (`id`, `application_id`, and — deliberately, per step 13 — no supersede-chain
+  certificate ids either), no `pdf_path`/`data_hash`. Never link to the certificate PDF from the
   public page either — the PDF's snapshot carries exactly the fields this endpoint withholds.
 - `instrument_type_label` is resolved server-side from `TYPE_LABELS` (`core/instrument_types.py`,
   same dict `app/pdf/certificate.py` already uses) instead of a raw `InstrumentType` code, since the
@@ -338,8 +641,11 @@ DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSP
   once gestured at — neither was ever actually built; see spec 10 §1/§10 D1.
 - `expiring_soon` in both responses means `status == VALID and valid_until <= today +
   EXPIRY_REMINDER_30D_DAYS` — the same threshold the reminder job itself uses, not a second
-  independent number. `AdminCertificateStats.valid` is **inclusive** of `expiring_soon` (not a
+  independent number, and the same one `core/certificate_status.py: is_expiring_soon()` (step 13)
+  reads from settings. `AdminCertificateStats.valid` is **inclusive** of `expiring_soon` (not a
   disjoint bucket): every expiring-soon certificate is still counted as valid.
+- `AdminCertificateStats.superseded` (step 13): a `SUPERSEDED`-status count bucket, alongside
+  `valid`/`expired`/`revoked`, from the same grouped-by-status query.
 
 ## Auth and RBAC (spec: `docs/specs/01-login-rbac.md`)
 

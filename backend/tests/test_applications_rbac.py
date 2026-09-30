@@ -77,6 +77,7 @@ def test_meta(client: TestClient, make_user) -> None:  # noqa: ANN001
         "DRAFT",
         "SUBMITTED",
         "DOCUMENT_REVIEW",
+        "DOCUMENTS_DEFICIENT",
         "SCHEDULED",
         "INSPECTION",
         "APPROVED",

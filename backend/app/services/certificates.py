@@ -95,7 +95,9 @@ def issue(db: Session, user: User, application_id: uuid.UUID, *, ip: str) -> App
     """Renders and stores the PDF, then atomically inserts the Certificate row and flips the
     application to CERTIFICATE_ISSUED. Mirrors documents.py: upload()'s lock ordering — the
     expensive/external work (PDF render, storage.put) happens outside any row lock; the
-    application row is then locked, re-checked and the insert committed (spec 08 §4)."""
+    application row is then locked, re-checked and the insert committed (spec 08 §4). Step 13:
+    also supersedes the instrument's previous certificate (if any, and not already SUPERSEDED) in
+    the same transaction — see the locking comment below."""
     application = applications_service.load(db, user, application_id, detail=True)
     if user.role != Role.LM_OFFICER:
         raise Forbidden("Insufficient permissions")
@@ -145,6 +147,25 @@ def issue(db: Session, user: User, application_id: uuid.UUID, *, ip: str) -> App
         if locked is None or locked.status != S.APPROVED:
             raise Conflict("Application must be approved before a certificate can be issued")
 
+        # Step 13: supersede the instrument's most recent certificate (any status), if it isn't
+        # already SUPERSEDED, inside this same transaction/lock — never a second commit. Locked
+        # with `of=Certificate` (the joined Application row is already locked above) under the
+        # same populate_existing discipline: a concurrent second issuance racing to supersede the
+        # same previous certificate must serialize on this row too, not just on the application.
+        previous = db.scalar(
+            select(Certificate)
+            .join(Application, Application.id == Certificate.application_id)
+            .where(Application.instrument_id == locked.instrument_id)
+            .order_by(Certificate.created_at.desc())
+            .limit(1)
+            .with_for_update(of=Certificate)
+            .execution_options(populate_existing=True)
+        )
+        supersede_previous = previous is not None and previous.status != (
+            CertificateStatus.SUPERSEDED
+        )
+        supersedes_id = previous.id if supersede_previous else None
+
         certificate = Certificate(
             id=certificate_id,
             application_id=locked.id,
@@ -156,8 +177,19 @@ def issue(db: Session, user: User, application_id: uuid.UUID, *, ip: str) -> App
             status=CertificateStatus.VALID,
             pdf_path=pdf_path,
             data_hash=data_hash,
+            supersedes_certificate_id=supersedes_id,
         )
         db.add(certificate)
+        # Flush the INSERT before the previous row's UPDATE below: both are plain scalar FK
+        # values (certificate_id was generated client-side above, not a post-insert PK), so
+        # SQLAlchemy's unit-of-work has no relationship to infer the ordering from and may
+        # otherwise emit the UPDATE first — which Postgres's (non-deferred) FK constraint would
+        # reject, since superseded_by_certificate_id would point at a row that doesn't exist yet.
+        if supersede_previous:
+            db.flush()
+            previous.status = CertificateStatus.SUPERSEDED
+            previous.superseded_by_certificate_id = certificate_id
+
         applications_service.apply_certificate_issued(db, locked, user, ip=ip)
         audit.log(
             db,
@@ -170,6 +202,7 @@ def issue(db: Session, user: User, application_id: uuid.UUID, *, ip: str) -> App
                 "certificate_number": certificate_number,
                 "valid_until": valid_until.isoformat(),
                 "data_hash": data_hash,
+                "supersedes_certificate_id": str(supersedes_id) if supersedes_id else None,
             },
             ip=ip,
         )

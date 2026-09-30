@@ -92,6 +92,7 @@ def make_user(db: Session) -> Callable[..., User]:
         *,
         org_state: str = "JH",
         org_district: str = "DHN",
+        gatc_eligible_category_ids: list[int] | None = None,
         **kw: object,
     ) -> User:
         org = None
@@ -101,6 +102,10 @@ def make_user(db: Session) -> Callable[..., User]:
                 name=f"Org {uuid.uuid4().hex[:6]}",
                 state_code=org_state,
                 district_code=org_district,
+                # Spec 15: only meaningful (and only ever set here) for role=GATC.
+                gatc_eligible_category_ids=(
+                    gatc_eligible_category_ids if role == Role.GATC else None
+                ),
             )
         scope: dict[str, object] = {}
         if role == Role.STATE_ADMIN:
@@ -267,9 +272,33 @@ def make_application(make_user, make_instrument) -> Callable[..., Application]: 
                     StatusChange(status=S.REJECTED, note="Invoice is not legible"),
                     ip="test",
                 )
+            elif target == S.DOCUMENTS_DEFICIENT:
+                app_service.transition(
+                    s,
+                    reviewer,
+                    application.id,
+                    StatusChange(
+                        status=S.DOCUMENTS_DEFICIENT, note="Previous certificate photo unreadable"
+                    ),
+                    ip="test",
+                )
             elif target in (S.SCHEDULED, S.INSPECTION, S.APPROVED):
                 from app.core import clock
+                from app.schemas.application import ReviewChecklistItemUpdate, ReviewChecklistUpdate
 
+                # Step 11: SCHEDULED is gated on every review-checklist item being checked.
+                app_service.patch_review_checklist(
+                    s,
+                    reviewer,
+                    application.id,
+                    ReviewChecklistUpdate(
+                        items=[
+                            ReviewChecklistItemUpdate(item_key=i.item_key, checked=True)
+                            for i in app_service.review_checklist_items(s, application.id)
+                        ]
+                    ),
+                    ip="test",
+                )
                 app_service.transition(
                     s,
                     reviewer,

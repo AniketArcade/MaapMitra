@@ -3,14 +3,28 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
+import { FileText, Gauge, LayoutDashboard, LogOut, Scale, ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
 import { useAuth } from "@/lib/auth";
+import { ADMIN_ROLES } from "@/lib/types";
 
 const NAV = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/instruments", label: "Instruments" },
-  { href: "/applications", label: "Applications" },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/instruments", label: "Instruments", icon: Gauge },
+  { href: "/applications", label: "Applications", icon: FileText },
 ];
 
 // UX guard only. The backend enforces every permission.
@@ -31,33 +45,54 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
 
+  // UX guard only. The backend enforces every permission.
+  const isAdmin = ADMIN_ROLES.includes(user.role);
+  const navItems = isAdmin ? [...NAV, { href: "/admin", label: "Admin", icon: ShieldCheck }] : NAV;
+
   return (
-    <div className="flex flex-1 flex-col">
-      <header className="flex items-center justify-between gap-4 border-b px-4 py-3">
-        <nav className="flex items-center gap-4 text-sm">
-          <span className="font-semibold">Legal Metrology</span>
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={
-                pathname.startsWith(item.href)
-                  ? "font-medium text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="hidden text-muted-foreground sm:inline">{user.email}</span>
-          <Button variant="outline" size="sm" onClick={() => void logout()}>
-            Log out
-          </Button>
-        </div>
-      </header>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">{children}</main>
-    </div>
+    <SidebarProvider>
+      <Sidebar collapsible="offcanvas">
+        <SidebarHeader>
+          <div className="flex items-center gap-2 px-2 py-1.5">
+            <Scale className="size-5 shrink-0 text-sidebar-primary" aria-hidden="true" />
+            <span className="text-sm font-semibold leading-tight text-sidebar-foreground">
+              Legal Metrology
+            </span>
+          </div>
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarMenu>
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname.startsWith(item.href);
+              return (
+                <SidebarMenuItem key={item.href}>
+                  <SidebarMenuButton isActive={isActive} render={<Link href={item.href} />}>
+                    <Icon className="size-4" aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
+          </SidebarMenu>
+        </SidebarContent>
+        <SidebarFooter>
+          <div className="flex flex-col gap-2 px-2 py-1.5">
+            <span className="truncate text-xs text-sidebar-foreground/70">{user.email}</span>
+            <Button variant="outline" size="sm" onClick={() => void logout()}>
+              <LogOut className="size-4" aria-hidden="true" />
+              Log out
+            </Button>
+          </div>
+        </SidebarFooter>
+      </Sidebar>
+      <SidebarInset>
+        <header className="flex items-center gap-2 border-b px-4 py-3 md:hidden">
+          <SidebarTrigger />
+          <span className="text-sm font-semibold">Legal Metrology</span>
+        </header>
+        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">{children}</main>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

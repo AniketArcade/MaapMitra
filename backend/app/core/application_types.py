@@ -16,6 +16,9 @@ class ApplicationStatus(StrEnum):
     DRAFT = "DRAFT"
     SUBMITTED = "SUBMITTED"
     DOCUMENT_REVIEW = "DOCUMENT_REVIEW"
+    # Step 11: DOCUMENT_REVIEW -> DOCUMENTS_DEFICIENT -> SUBMITTED is the "fix and resubmit"
+    # loop. Deliberately NOT in TERMINAL_STATUSES: the business can still act on it.
+    DOCUMENTS_DEFICIENT = "DOCUMENTS_DEFICIENT"
     SCHEDULED = "SCHEDULED"
     INSPECTION = "INSPECTION"
     APPROVED = "APPROVED"
@@ -57,6 +60,7 @@ STATUS_LABELS: dict[ApplicationStatus, str] = {
     ApplicationStatus.DRAFT: "Draft",
     ApplicationStatus.SUBMITTED: "Submitted",
     ApplicationStatus.DOCUMENT_REVIEW: "Document review",
+    ApplicationStatus.DOCUMENTS_DEFICIENT: "Documents deficient",
     ApplicationStatus.SCHEDULED: "Scheduled",
     ApplicationStatus.INSPECTION: "Inspection",
     ApplicationStatus.APPROVED: "Approved",

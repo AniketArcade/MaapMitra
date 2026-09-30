@@ -4,6 +4,8 @@ from typing import Self
 
 from pydantic import BaseModel
 
+from app.core import clock
+from app.core.certificate_status import is_expiring_soon
 from app.core.config import get_settings
 from app.core.instrument_types import CapacityUnit, InstrumentType
 from app.models.certificate import Certificate, CertificateStatus
@@ -27,6 +29,15 @@ class CertificateOut(BaseModel):
     capacity_unit: CapacityUnit
     organization_name: str
     qr_code_data_uri: str  # "data:image/png;base64,...", regenerated on every read — never stored
+    # Step 13. Raw ids, not nested refs: this schema already denormalizes everything flatly
+    # (e.g. application_id above has no ApplicationRef), unlike InstrumentOut.active_application
+    # (a cross-type Instrument -> Application pointer, where the nested ref carries a display
+    # number/status the instrument screen needs inline). A same-type certificate -> certificate
+    # link is simplest read the same way application_id already is; the frontend calls
+    # GET /certificates/{id} for the linked certificate's own details when it needs them.
+    supersedes_certificate_id: uuid.UUID | None
+    superseded_by_certificate_id: uuid.UUID | None
+    is_expiring_soon: bool
 
     @classmethod
     def from_model(cls, c: Certificate) -> Self:
@@ -49,6 +60,9 @@ class CertificateOut(BaseModel):
             capacity_unit=s["capacity_unit"],
             organization_name=s["organization_name"],
             qr_code_data_uri=qr_code_data_uri(verify_url),
+            supersedes_certificate_id=c.supersedes_certificate_id,
+            superseded_by_certificate_id=c.superseded_by_certificate_id,
+            is_expiring_soon=is_expiring_soon(c.status, c.valid_until, today=clock.today()),
         )
 
 

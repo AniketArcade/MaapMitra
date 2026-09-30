@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { CategoryValuesSummary } from "@/components/instruments/category-values-summary";
 import { NO_ACCESS, StateMessage } from "@/components/instruments/state-message";
 import { useInstrument } from "@/components/instruments/use-instrument";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -18,7 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { getInstrumentMeta, regionLabel, typeLabel } from "@/lib/meta";
+import { categoryById, getInstrumentMeta, regionLabel, typeLabel } from "@/lib/meta";
 import type { InstrumentMeta } from "@/lib/types";
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -51,6 +52,7 @@ export default function InstrumentDetailPage() {
 
   const i = state.instrument;
   const canEdit = user?.role === "BUSINESS";
+  const category = categoryById(meta, i.category_id);
 
   async function onDelete() {
     setDeleting(true);
@@ -101,6 +103,10 @@ export default function InstrumentDetailPage() {
         <Row label="Serial number" value={i.serial_number} />
         <Row label="Maximum capacity" value={`${i.capacity} ${i.capacity_unit}`} />
         <Row label="Accuracy class" value={i.accuracy_class ? `Class ${i.accuracy_class}` : "Not specified"} />
+        <Row
+          label="Can be transported?"
+          value={i.transportable ? "Yes (office/test centre)" : "No (on-site/in-situ)"}
+        />
         <Row label="Address" value={i.address} />
         <Row label="Region" value={regionLabel(meta, i.state_code, i.district_code)} />
         <Row
@@ -109,6 +115,22 @@ export default function InstrumentDetailPage() {
         />
         <Row label="Registered" value={new Date(i.created_at).toLocaleString()} />
       </dl>
+
+      {category ? (
+        <div className="grid gap-3 rounded-lg border p-4">
+          <h2 className="text-sm font-medium">
+            Category: {category.id}. {category.name}
+          </h2>
+          <CategoryValuesSummary fields={category.field_schema} values={i.category_values ?? {}} />
+        </div>
+      ) : i.category_id !== null ? (
+        <Alert>
+          <AlertDescription>
+            This instrument has a category assigned (id {i.category_id}), but its schema could not
+            be loaded.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {!canEdit && i.active_application ? (
         <p className="text-sm">

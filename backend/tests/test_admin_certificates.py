@@ -77,12 +77,19 @@ def test_admin_certificates_stats_zero_filled_and_inclusive(
     officer = make_user(Role.LM_OFFICER)
 
     empty = client.get("/api/admin/certificates/stats", headers=auth_header(admin)).json()
-    assert empty == {"valid": 0, "expiring_soon": 0, "expired": 0, "revoked": 0}
+    assert empty == {
+        "valid": 0,
+        "expiring_soon": 0,
+        "expired": 0,
+        "revoked": 0,
+        "superseded": 0,
+    }
 
     far_out = _issue(client, officer, make_application(status="APPROVED", officer=officer).id)
     soon = _issue(client, officer, make_application(status="APPROVED", officer=officer).id)
     expired = _issue(client, officer, make_application(status="APPROVED", officer=officer).id)
     revoked = _issue(client, officer, make_application(status="APPROVED", officer=officer).id)
+    superseded = _issue(client, officer, make_application(status="APPROVED", officer=officer).id)
 
     _set(soon["id"], valid_until=clock.today() + timedelta(days=5))
     _set(
@@ -95,8 +102,15 @@ def test_admin_certificates_stats_zero_filled_and_inclusive(
         valid_until=clock.today() - timedelta(days=1),
         status=CertificateStatus.REVOKED,
     )
+    _set(superseded["id"], status=CertificateStatus.SUPERSEDED)
 
     stats = client.get("/api/admin/certificates/stats", headers=auth_header(admin)).json()
     # valid is inclusive of expiring_soon (far_out + soon), not a disjoint bucket.
-    assert stats == {"valid": 2, "expiring_soon": 1, "expired": 1, "revoked": 1}
+    assert stats == {
+        "valid": 2,
+        "expiring_soon": 1,
+        "expired": 1,
+        "revoked": 1,
+        "superseded": 1,
+    }
     assert far_out["certificate_number"]  # sanity: far_out was actually created

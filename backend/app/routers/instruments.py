@@ -2,10 +2,12 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from sqlalchemy import select
 
 from app.core.deps import DB, CurrentUser, get_client_ip, require_roles
 from app.core.instrument_types import InstrumentType
 from app.core.roles import Role
+from app.models.instrument_category import InstrumentCategory
 from app.models.user import User
 from app.schemas.common import Page, PageParams
 from app.schemas.instrument import InstrumentCreate, InstrumentMeta, InstrumentOut, InstrumentUpdate
@@ -26,8 +28,9 @@ Owner = Annotated[User, Depends(require_roles(Role.BUSINESS))]
 
 # Declared before /{instrument_id} so "meta" is never parsed as an id.
 @router.get("/meta")
-def meta(_: CurrentUser) -> InstrumentMeta:
-    return InstrumentMeta.build()
+def meta(_: CurrentUser, db: DB) -> InstrumentMeta:
+    categories = db.scalars(select(InstrumentCategory).order_by(InstrumentCategory.id)).all()
+    return InstrumentMeta.build(list(categories))
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
