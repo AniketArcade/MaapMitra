@@ -17,12 +17,14 @@ class CertificateStatus(StrEnum):
     VALID = "VALID"
     EXPIRED = "EXPIRED"
     REVOKED = "REVOKED"
+    SUPERSEDED = "SUPERSEDED"
 
 
 class Certificate(UUIDPk, Timestamps, Base):
     """One per application, created once at issuance (step 8) and never altered afterward except
-    by the expiry job (step 10, VALID -> EXPIRED, plus the reminder_*_sent_at columns) or a revoke
-    action (not yet built).
+    by the expiry job (step 10, VALID -> EXPIRED, plus the reminder_*_sent_at columns), a revoke
+    action (not yet built), or `services/certificates.py: issue()` superseding it (step 13) when a
+    later certificate is issued for the same instrument.
     `snapshot` freezes the instrument/business fields shown on the PDF at issuance time, since the
     instrument's identity/location fields unlock once the application reaches this terminal status
     (core/instrument_lock.py) — a live join would let a later edit silently change what an
@@ -52,3 +54,15 @@ class Certificate(UUIDPk, Timestamps, Base):
     # "not yet sent" — the idempotency mechanism for the expiry job.
     reminder_30d_sent_at: Mapped[date | None] = mapped_column(Date)
     reminder_7d_sent_at: Mapped[date | None] = mapped_column(Date)
+    # Superseding chain (step 13): set by services/certificates.py: issue() in the same
+    # transaction as the new certificate's insert, never by any other code path. ON DELETE
+    # SET NULL — a certificate is never hard-deleted by this relationship (certificates aren't
+    # hard-deleted at all today, but the FK shouldn't assume that forever).
+    supersedes_certificate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("certificates.id", ondelete="SET NULL"),
+    )
+    superseded_by_certificate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("certificates.id", ondelete="SET NULL"),
+    )

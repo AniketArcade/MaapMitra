@@ -109,6 +109,7 @@ Workflow for every schema change:
 | `0007` | certificate reminders (`reminder_30d_sent_at`, `reminder_7d_sent_at`, both nullable `Date`) | 2026-09-30 (no seed changes; the expiry job is driven live in the demo) |
 | `0008` | document review checklist (`document_review_checklist_items`, `application_status` enum gains `DOCUMENTS_DEFICIENT`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/11-document-review-checklist.md`) |
 | `0009` | transportability and verification mode (`instruments.transportable` boolean, NOT NULL, `server_default(true())`; new `verification_mode` enum type; `applications.verification_mode`, nullable) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/14-transportability.md`) |
+| `0010` | certificate superseding (`certificate_status` enum gains `SUPERSEDED`; `certificates.supersedes_certificate_id` / `superseded_by_certificate_id`, both nullable self-referential FKs, `ON DELETE SET NULL`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/13-certificate-superseding.md`) |
 
 ## Layering rules
 
@@ -174,7 +175,7 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
   not recreated) on a later re-entry via the `DOCUMENTS_DEFICIENT → SUBMITTED → DOCUMENT_REVIEW`
   loop. `ON DELETE CASCADE` from `applications`, unique on `(application_id, item_key)`.
   `DOCUMENT_REVIEW → SCHEDULED` is blocked (409) until every row's `checked` is `true`.
-- `certificates` (spec `docs/specs/08-certificate-pdf-qr.md`): one row per application (`application_id` unique FK, `ON DELETE RESTRICT`), created by `services/certificates.py: issue()` — never through `transition()`. `certificate_number` = `LM-CERT-{UTC year}-{nextval('certificate_number_seq'):06d}`. `snapshot` (JSONB) freezes the instrument/business/approver fields shown on the PDF at issuance time — a deliberate JSONB blob, not relational rows like the checklist (it's one immutable bundle written once and always read whole, the opposite case from spec 06's checklist items), needed because the instrument unlocks (editable again) the moment the application reaches this terminal status. `valid_from`/`valid_until` = issue date + `CERTIFICATE_VALIDITY_YEARS` (Settings field, default 2 — ASSUMPTION, not a real Legal Metrology rule). `status` starts `VALID`; the expiry job (step 10) is the only thing that ever moves it, and only to `EXPIRED` — `REVOKED` has no writer anywhere yet (no revoke action exists). `pdf_path` = `certificates/{id}.pdf`, stored in the same single `SUPABASE_BUCKET` as documents (no new bucket). `data_hash`: SHA-256 hex of a fixed pipe-joined string of the certificate's own fields (`app/services/certificates.py: _data_hash()`) — a tamper-evidence fingerprint, not a cryptographic file signature (root `CLAUDE.md`'s "hash-based in MVP" decision). No `qr_token` column: the QR/public URL encodes `certificate_number` directly (see QR section below). `reminder_30d_sent_at`/`reminder_7d_sent_at` (migration `0007`, nullable `Date`): the expiry job's idempotency mechanism (see Expiry job below) — `NULL` means "not yet sent," never re-derived from a log.
+- `certificates` (spec `docs/specs/08-certificate-pdf-qr.md`): one row per application (`application_id` unique FK, `ON DELETE RESTRICT`), created by `services/certificates.py: issue()` — never through `transition()`. `certificate_number` = `LM-CERT-{UTC year}-{nextval('certificate_number_seq'):06d}`. `snapshot` (JSONB) freezes the instrument/business/approver fields shown on the PDF at issuance time — a deliberate JSONB blob, not relational rows like the checklist (it's one immutable bundle written once and always read whole, the opposite case from spec 06's checklist items), needed because the instrument unlocks (editable again) the moment the application reaches this terminal status. `valid_from`/`valid_until` = issue date + `CERTIFICATE_VALIDITY_YEARS` (Settings field, default 2 — ASSUMPTION, not a real Legal Metrology rule). `status` starts `VALID`; the expiry job (step 10) is the only thing that ever moves it to `EXPIRED`, and `issue()` itself is the only thing that ever moves an *older* certificate to `SUPERSEDED` (step 13, see below) — `REVOKED` has no writer anywhere yet (no revoke action exists). `pdf_path` = `certificates/{id}.pdf`, stored in the same single `SUPABASE_BUCKET` as documents (no new bucket). `data_hash`: SHA-256 hex of a fixed pipe-joined string of the certificate's own fields (`app/services/certificates.py: _data_hash()`) — a tamper-evidence fingerprint, not a cryptographic file signature (root `CLAUDE.md`'s "hash-based in MVP" decision). No `qr_token` column: the QR/public URL encodes `certificate_number` directly (see QR section below). `reminder_30d_sent_at`/`reminder_7d_sent_at` (migration `0007`, nullable `Date`): the expiry job's idempotency mechanism (see Expiry job below) — `NULL` means "not yet sent," never re-derived from a log. `supersedes_certificate_id`/`superseded_by_certificate_id` (migration `0010`, spec `docs/specs/13-certificate-superseding.md`): nullable self-referential FKs, `ON DELETE SET NULL`, both `NULL` for every certificate issued before `0010` (no backfill — same "an honest NULL beats a fabricated value" reasoning as spec 14's `verification_mode`). Set only by `issue()`, in the same transaction as the new row's insert.
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
   - instrument `instrument_uid`: `LM-JH-DHN-000123`
@@ -241,7 +242,41 @@ DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
 - No new endpoint: `transportable` rides the existing `POST/PATCH /instruments` and
   `InstrumentOut`; `verification_mode` rides the existing `ApplicationDetail`/`ApplicationOut`.
 
-Certificate status: `VALID` · `EXPIRED` · `REVOKED`
+### Certificate superseding + expiring-soon (step 13, spec `docs/specs/13-certificate-superseding.md`)
+- `services/certificates.py: issue()` now also supersedes the instrument's previous certificate,
+  if one exists and isn't already `SUPERSEDED`, in the **same transaction** as the new
+  certificate's insert (no second commit): look up the most recent certificate for the same
+  `instrument_id` (via the application → instrument join), lock it with `with_for_update(of=
+  Certificate)` under the same `populate_existing=True` discipline every other re-check lock in
+  this function uses, set its `status = SUPERSEDED` and `superseded_by_certificate_id`, and set
+  the new row's `supersedes_certificate_id`. A `db.flush()` runs between `db.add(certificate)` and
+  the previous row's update — both FK values are plain client-generated UUIDs, not ORM
+  relationships, so SQLAlchemy's unit-of-work won't otherwise order the `INSERT` before the
+  `UPDATE`, and Postgres's (non-deferred) FK constraint rejects the reverse order.
+- `core/certificate_status.py: is_expiring_soon(status, valid_until, *, today)` — an **additive
+  sibling** to `effective_status()`, not a change to it: `True` only when `effective_status()`
+  already reads `VALID` and `valid_until <= today + EXPIRY_REMINDER_30D_DAYS`, the same threshold
+  `services/admin.py`/`services/certificates.py: expiry_check()` already use. `effective_status()`
+  itself does **not** get a `SUPERSEDED`-wins branch — it falls through the same
+  "`valid_until < today` → `EXPIRED`" rule every non-`REVOKED` status already gets, exactly as
+  before this step; see the spec's D3 for why that was a hard constraint, not an oversight.
+- `CertificateOut` gains `supersedes_certificate_id`/`superseded_by_certificate_id` (raw
+  `uuid.UUID | None`, not nested refs — this schema already exposes `application_id` the same
+  flat way) and `is_expiring_soon: bool`.
+- `AdminCertificateStats` (`GET /admin/certificates/stats`) gains a `superseded` count bucket,
+  populated from the same grouped-by-status query already backing `valid`/`expired`/`revoked`.
+- **`PublicVerifyOut` gains exactly two fields** — `instrument_uid` and `issued_by` (from the
+  snapshot's existing `approved_by_name`) — under this step's explicit authorization to deviate
+  from spec 09 §5's "complete field set" wording (that schema's own docstring says "never add a
+  field here without checking spec 09 §5/§10 D4 first"; this is that check, recorded here and in
+  spec 13's own Decisions section). The supersede chain and `is_expiring_soon` were deliberately
+  **not** added to the public schema: a superseded certificate's own `status` becoming
+  `SUPERSEDED` is already the actionable signal a public verifier needs, and exposing either would
+  mean leaking an internal certificate id or a nuance aimed at the certificate holder, not the
+  public, for no new information `status` doesn't already carry. See §5 of spec 13 for the full
+  reasoning.
+
+Certificate status: `VALID` · `EXPIRED` · `REVOKED` · `SUPERSEDED` (step 13)
 
 ### Scheduling (step 5, spec `docs/specs/05-officer-dashboard.md`)
 - `today()` in `core/clock.py` is the current date in `APP_TIMEZONE` (default `Asia/Kolkata`, ASSUMPTION), built on a separate `now_utc()` so tests can freeze time via `monkeypatch.setattr(clock, "now_utc", ...)` — there's no freezegun dependency. A UTC-only check would reject valid IST dates for up to 5h30m around midnight.
@@ -331,7 +366,7 @@ PATCH /api/inspections/{id}      POST  /api/inspections/{id}/submit
 GET   /api/certificates/{id}     GET   /api/certificates/{id}/pdf
 POST  /api/applications/{id}/certificate   # LM_OFFICER only; issues a certificate while APPROVED
 POST  /api/jobs/expiry-check     # requires X-Cron-Secret header, no rate limit (step 10)
-GET   /api/admin/certificates/stats            # ADMIN_ROLES; {valid, expiring_soon, expired, revoked}
+GET   /api/admin/certificates/stats            # ADMIN_ROLES; {valid, expiring_soon, expired, revoked, superseded}
 GET   /api/admin/certificates/expiring-soon    # ADMIN_ROLES; Page[CertificateOut], valid_until asc
 GET   /api/public/verify/{certificate_number}                     # no auth
 GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}, document_review_checklist (step 11), verification_modes (step 14)
@@ -343,11 +378,15 @@ PATCH /api/applications/{id}/review-checklist   # LM_OFFICER only, DOCUMENT_REVI
 DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSPECTION evidence (step 6)
 ```
 
-### Public verify (step 9, spec `docs/specs/09-public-verify.md`)
-- `PublicVerifyOut` (`app/schemas/public.py`) is the **complete** field list: `certificate_number`,
-  `status`, `instrument_type_label`, `manufacturer`, `model`, `serial_number`, `valid_from`,
-  `valid_until`. No owner PII (`organization_name`, `address`), no documents, no internal IDs
-  (`id`, `application_id`), no `pdf_path`/`data_hash`. Never link to the certificate PDF from the
+### Public verify (step 9, spec `docs/specs/09-public-verify.md`; field list extended by step 13, spec `docs/specs/13-certificate-superseding.md`)
+- `PublicVerifyOut` (`app/schemas/public.py`) field list: `certificate_number`, `status`,
+  `instrument_type_label`, `instrument_uid`, `manufacturer`, `model`, `serial_number`,
+  `valid_from`, `valid_until`, `issued_by`. The last two spec 09 §5 did not originally include —
+  step 13 added them under explicit authorization to deviate from spec 09 §5's "complete field
+  set" wording (see that step's spec doc §5 and the "Certificate superseding" subsection above for
+  the full reasoning). No owner PII (`organization_name`, `address`), no documents, no internal
+  database IDs (`id`, `application_id`, and — deliberately, per step 13 — no supersede-chain
+  certificate ids either), no `pdf_path`/`data_hash`. Never link to the certificate PDF from the
   public page either — the PDF's snapshot carries exactly the fields this endpoint withholds.
 - `instrument_type_label` is resolved server-side from `TYPE_LABELS` (`core/instrument_types.py`,
   same dict `app/pdf/certificate.py` already uses) instead of a raw `InstrumentType` code, since the
@@ -405,8 +444,11 @@ DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSP
   once gestured at — neither was ever actually built; see spec 10 §1/§10 D1.
 - `expiring_soon` in both responses means `status == VALID and valid_until <= today +
   EXPIRY_REMINDER_30D_DAYS` — the same threshold the reminder job itself uses, not a second
-  independent number. `AdminCertificateStats.valid` is **inclusive** of `expiring_soon` (not a
+  independent number, and the same one `core/certificate_status.py: is_expiring_soon()` (step 13)
+  reads from settings. `AdminCertificateStats.valid` is **inclusive** of `expiring_soon` (not a
   disjoint bucket): every expiring-soon certificate is still counted as valid.
+- `AdminCertificateStats.superseded` (step 13): a `SUPERSEDED`-status count bucket, alongside
+  `valid`/`expired`/`revoked`, from the same grouped-by-status query.
 
 ## Auth and RBAC (spec: `docs/specs/01-login-rbac.md`)
 

@@ -10,6 +10,7 @@ class AdminCertificateStats(BaseModel):
     expiring_soon: int  # VALID and valid_until <= today + EXPIRY_REMINDER_30D_DAYS
     expired: int
     revoked: int
+    superseded: int  # step 13
 
     @classmethod
     def from_counts(cls, by_status: dict[CertificateStatus, int], expiring_soon: int) -> Self:
@@ -18,4 +19,5 @@ class AdminCertificateStats(BaseModel):
             expiring_soon=expiring_soon,
             expired=by_status.get(CertificateStatus.EXPIRED, 0),
             revoked=by_status.get(CertificateStatus.REVOKED, 0),
+            superseded=by_status.get(CertificateStatus.SUPERSEDED, 0),
         )
