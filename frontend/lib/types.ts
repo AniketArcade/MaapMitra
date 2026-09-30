@@ -62,6 +62,11 @@ export type Instrument = {
   capacity: number;
   capacity_unit: string;
   accuracy_class: string | null;
+  // Spec 16: optional richer category system, additive alongside instrument_type/capacity/
+  // capacity_unit/accuracy_class above. Both null together, or both set together (see
+  // backend/app/schemas/instrument.py's category_pair_valid).
+  category_id: number | null;
+  category_values: Record<string, unknown> | null;
   address: string;
   state_code: string;
   district_code: string;
@@ -76,6 +81,50 @@ export type Instrument = {
   locked_fields: string[];
 };
 
+// Spec 16: one field definition inside an InstrumentCategory's `field_schema` (GET
+// /instruments/meta's `categories`). Mirrors backend/app/schemas/instrument_category.py's
+// CategoryFieldSchema field-for-field (snake_case JSON, same as the rest of this backend).
+// `type` mirrors the backend's own deliberate choice to leave it a plain string rather than a
+// union type enforced here — the set of valid values is documented, not type-checked, because
+// the content lives in DB rows (JSONB), not code.
+export type CategoryFieldType =
+  | "text"
+  | "number"
+  | "select"
+  | "multiselect"
+  | "unit-number"
+  | "range-band"
+  | "repeater"
+  | "toggle"
+  | "date"
+  | "file";
+
+export type CategoryFieldOption = { value: string; label: string };
+
+export type CategoryFieldSchema = {
+  key: string;
+  label: string;
+  type: CategoryFieldType;
+  required: boolean;
+  unit: string | null;
+  unit_options: string[] | null;
+  options: CategoryFieldOption[] | null;
+  presets: CategoryFieldOption[] | null;
+  repeater_label: string | null;
+  repeater_fields: CategoryFieldSchema[] | null;
+  min: number | null;
+  max: number | null;
+  help_text: string | null;
+};
+
+// Mirrors backend/app/schemas/instrument_category.py's InstrumentCategoryOut.
+export type InstrumentCategory = {
+  id: number;
+  name: string;
+  validity_months: number;
+  field_schema: CategoryFieldSchema[];
+};
+
 export type InstrumentMeta = {
   types: { value: string; label: string; units: string[] }[];
   accuracy_classes: string[];
@@ -84,6 +133,9 @@ export type InstrumentMeta = {
     state_name: string;
     districts: { code: string; name: string }[];
   }[];
+  // Spec 16: the 33 instrument categories. Never hard-code their names/fields — load them from
+  // here (getInstrumentMeta()) same as types/regions/accuracy_classes above.
+  categories: InstrumentCategory[];
 };
 
 export type ActiveApplicationRef = { id: string; application_number: string; status: string };

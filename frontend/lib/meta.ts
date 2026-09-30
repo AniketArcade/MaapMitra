@@ -1,5 +1,5 @@
 import { api } from "@/lib/api";
-import type { ApplicationMeta, InspectionMeta, InstrumentMeta } from "@/lib/types";
+import type { ApplicationMeta, InspectionMeta, InstrumentCategory, InstrumentMeta } from "@/lib/types";
 
 // Loaded once per page session; the backend is the single source of truth.
 let metaPromise: Promise<InstrumentMeta> | null = null;
@@ -14,6 +14,13 @@ export function getInstrumentMeta(): Promise<InstrumentMeta> {
 
 export function typeLabel(meta: InstrumentMeta | null, value: string): string {
   return meta?.types.find((t) => t.value === value)?.label ?? value;
+}
+
+// Spec 16: look up a category (GET /instruments/meta's `categories`) by id. Never hard-code
+// category names/fields — always go through this or the raw `meta.categories` list.
+export function categoryById(meta: InstrumentMeta | null, id: number | null): InstrumentCategory | null {
+  if (id === null) return null;
+  return meta?.categories.find((c) => c.id === id) ?? null;
 }
 
 export function regionLabel(meta: InstrumentMeta | null, state: string, district: string): string {

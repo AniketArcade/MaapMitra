@@ -6,9 +6,15 @@ import { FormField } from "@/components/auth/form-field";
 import { SelectField } from "@/components/select-field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { CategoryPicker } from "@/components/instruments/category-picker";
+import {
+  DynamicFieldRenderer,
+  initCategoryValues,
+  validateCategoryValues,
+} from "@/components/instruments/dynamic-field-renderer";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { getInstrumentMeta } from "@/lib/meta";
+import { categoryById, getInstrumentMeta } from "@/lib/meta";
 import type { Instrument, InstrumentMeta } from "@/lib/types";
 
 type Values = {
@@ -94,9 +100,32 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
+  // Spec 16: the optional richer category system, additive alongside the flat fields above.
+  // category_id/category_values are a paired nullable field on the backend — both null (no
+  // category assigned) or both set. Kept as separate state from `Values` because their shape
+  // (a number id + an arbitrary, category-schema-shaped JSON object) doesn't fit the flat
+  // string-keyed payload() below.
+  const [categoryId, setCategoryId] = useState<number | null>(initial?.category_id ?? null);
+  const [categoryValues, setCategoryValues] = useState<Record<string, unknown>>(
+    initial?.category_values ?? {},
+  );
+  const [categoryFieldErrors, setCategoryFieldErrors] = useState<Record<string, string>>({});
+
   useEffect(() => {
     getInstrumentMeta().then(setMeta, () => setMetaError(true));
   }, []);
+
+  const selectedCategory = useMemo(() => categoryById(meta, categoryId), [meta, categoryId]);
+
+  // Changing the category swaps in a fresh values object for the new schema — a newly-selected
+  // category has no prior values to preserve, but re-selecting the same one (e.g. after the
+  // search box re-renders the list) is a no-op that keeps whatever the user already filled in.
+  function handleCategoryChange(nextId: number | null) {
+    if (nextId === categoryId) return;
+    setCategoryId(nextId);
+    setCategoryFieldErrors({});
+    setCategoryValues(nextId === null ? {} : initCategoryValues(categoryById(meta, nextId)?.field_schema ?? []));
+  }
 
   const units = useMemo(
     () => meta?.types.find((t) => t.value === values.instrument_type)?.units ?? [],
@@ -127,20 +156,48 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
     event.preventDefault();
     setError(null);
     setFieldErrors({});
+
+    // Top-level required-field presence only — mirrors the backend's own validation scope
+    // exactly (spec 16 §7); see dynamic-field-renderer.tsx's validateCategoryValues for why.
+    const categoryErrs =
+      categoryId !== null ? validateCategoryValues(selectedCategory?.field_schema ?? [], categoryValues) : {};
+    setCategoryFieldErrors(categoryErrs);
+    if (Object.keys(categoryErrs).length > 0) {
+      setError("Please fix the highlighted fields.");
+      return;
+    }
+
     const body = payload(values);
-    let request: Record<string, string | null> = body;
+    let request: Record<string, unknown>;
     if (mode === "edit") {
       // PATCH only what changed; instrument_type is not editable.
       const before = payload(toValues(initial));
       request = Object.fromEntries(
         Object.entries(body).filter(([k, v]) => k !== "instrument_type" && v !== before[k]),
       );
+      // category_id/category_values must be PATCHed together (never one without the other) —
+      // only include the pair at all if it actually changed from the instrument's current one.
+      const initialCategoryId = initial.category_id;
+      const initialCategoryValues = initial.category_values ?? {};
+      const categoryPairChanged =
+        categoryId !== initialCategoryId ||
+        (categoryId !== null && JSON.stringify(categoryValues) !== JSON.stringify(initialCategoryValues));
+      if (categoryPairChanged) {
+        request.category_id = categoryId;
+        request.category_values = categoryId === null ? null : categoryValues;
+      }
       if (Object.keys(request).length === 0) {
         onSaved(initial);
         return;
       }
     } else {
       request = Object.fromEntries(Object.entries(body).filter(([, v]) => v !== null));
+      // Both existing instrument_type-only creation and category-driven creation stay possible:
+      // category_id/category_values are only sent at all when a category was actually chosen.
+      if (categoryId !== null) {
+        request.category_id = categoryId;
+        request.category_values = categoryValues;
+      }
     }
 
     setSubmitting(true);
@@ -165,6 +222,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
   // Never re-derive the lock rule client-side: disable exactly what the backend reports.
   const locked = new Set(mode === "edit" ? initial.locked_fields : []);
   const locationLocked = locked.has("address") || locked.has("latitude") || locked.has("longitude");
+  const categoryLocked = locked.has("category_id") || locked.has("category_values");
 
   if (metaError) {
     return (
@@ -271,6 +329,37 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
           disabled={locked.has("accuracy_class")}
           error={fieldErrors.accuracy_class}
         />
+      </fieldset>
+
+      <fieldset className="grid gap-4">
+        <legend className="mb-2 text-sm font-medium">Category (optional)</legend>
+        <p className="text-sm text-muted-foreground">
+          Pick one of the 33 instrument categories to capture its category-specific fields
+          alongside the details above. Leaving this unset still lets you register the instrument
+          with just the flat fields.
+        </p>
+        <CategoryPicker
+          categories={meta.categories}
+          value={categoryId}
+          onChange={handleCategoryChange}
+          disabled={categoryLocked}
+          error={fieldErrors.category_id}
+        />
+        {fieldErrors.category_values ? (
+          <Alert variant="destructive">
+            <AlertDescription>{fieldErrors.category_values}</AlertDescription>
+          </Alert>
+        ) : null}
+        {selectedCategory ? (
+          <DynamicFieldRenderer
+            fields={selectedCategory.field_schema}
+            values={categoryValues}
+            onChange={(key, value) => setCategoryValues((prev) => ({ ...prev, [key]: value }))}
+            errors={categoryFieldErrors}
+            disabled={categoryLocked}
+            className="rounded-lg border p-4"
+          />
+        ) : null}
       </fieldset>
 
       <fieldset className="grid gap-4 sm:grid-cols-2">
