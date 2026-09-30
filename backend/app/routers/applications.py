@@ -22,6 +22,7 @@ from app.schemas.common import Page, PageParams
 from app.services import applications as service
 from app.services import certificates as certificates_service
 from app.services import inspections as inspections_service
+from app.services import payments as payments_service
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -154,4 +155,12 @@ def issue_certificate(
     request: Request, application_id: uuid.UUID, user: Officer, db: DB
 ) -> ApplicationDetail:
     certificates_service.issue(db, user, application_id, ip=get_client_ip(request))
+    return _detail(db, user, application_id)
+
+
+@router.post("/{application_id}/mock-pay")
+def mock_pay(request: Request, application_id: uuid.UUID, user: Owner, db: DB) -> ApplicationDetail:
+    """Spec 12: mocked, informational-only payment action. BUSINESS (owner) only — out-of-org is
+    404 via applications_service.load(), never 403, same as every other Owner-gated endpoint."""
+    payments_service.mock_pay(db, user, application_id, ip=get_client_ip(request))
     return _detail(db, user, application_id)

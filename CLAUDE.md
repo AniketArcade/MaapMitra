@@ -95,7 +95,15 @@ the officer inspects and approves → `CERT-2026-000123` with QR is issued → a
 
 ## Open decisions
 
-- [ ] Payments: mocked in MVP (`payments` table only)
+- [x] Payments: **resolved (step 12, `docs/specs/12-payments.md`).** A `payments` table
+  plus a `POST /api/applications/{id}/mock-pay` action (BUSINESS only) exist so the concept is
+  visible in the product, but — an explicit user decision, not an oversight — payment status is
+  **purely informational**: no application status transition in
+  `backend/app/services/applications.py: ALLOWED_TRANSITIONS`/`transition()` reads or gates on it
+  in any way. An application can reach `CERTIFICATE_ISSUED` with no `payments` row ever created
+  (proven by `backend/tests/test_payments.py::test_payment_never_gates_the_lifecycle`). See
+  `backend/CLAUDE.md`'s "Payments — mocked, informational only" subsection for the full
+  implementation.
 - [ ] GATC workflow depth: minimal
 - [ ] Cron runner: Render Cron vs GitHub Actions
 - [ ] Digital signature: hash-based in MVP, government e-sign later

@@ -110,6 +110,7 @@ def _scoped(user: User) -> Select[tuple[Application]]:
         joinedload(Application.organization),
         joinedload(Application.inspection).joinedload(Inspection.assigned_officer),
         joinedload(Application.certificate),
+        joinedload(Application.payment),
     )
     return scope_applications(stmt, user)
 

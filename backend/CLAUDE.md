@@ -110,6 +110,7 @@ Workflow for every schema change:
 | `0008` | document review checklist (`document_review_checklist_items`, `application_status` enum gains `DOCUMENTS_DEFICIENT`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/11-document-review-checklist.md`) |
 | `0009` | transportability and verification mode (`instruments.transportable` boolean, NOT NULL, `server_default(true())`; new `verification_mode` enum type; `applications.verification_mode`, nullable) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/14-transportability.md`) |
 | `0010` | certificate superseding (`certificate_status` enum gains `SUPERSEDED`; `certificates.supersedes_certificate_id` / `superseded_by_certificate_id`, both nullable self-referential FKs, `ON DELETE SET NULL`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/13-certificate-superseding.md`) |
+| `0011` | payments (`payments` table: `application_id` unique FK `ON DELETE CASCADE`, `amount` nullable `Numeric(10,2)`, new `payment_status` enum `NOT_PAID`/`PENDING`/`PAID` default `NOT_PAID`, `paid_at` nullable timestamptz) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/12-payments.md`) |
 
 ## Layering rules
 
@@ -132,7 +133,7 @@ Workflow for every schema change:
 
 Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications`, `documents`, `inspections`,
 `inspection_checklist_items`, `inspection_measurements`, `document_review_checklist_items`,
-`certificates`, `payments` (mocked), `audit_logs`
+`certificates`, `payments` (mocked, informational only — step 12, see below), `audit_logs`
 
 - `users`: DB check constraints tie `role` to `organization_id` (BUSINESS/GATC need one, officials must not) and require `state_code`/`district_code` for officials.
 - `refresh_tokens`: SHA-256 `token_hash` only, never the raw token.
@@ -176,6 +177,28 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
   loop. `ON DELETE CASCADE` from `applications`, unique on `(application_id, item_key)`.
   `DOCUMENT_REVIEW → SCHEDULED` is blocked (409) until every row's `checked` is `true`.
 - `certificates` (spec `docs/specs/08-certificate-pdf-qr.md`): one row per application (`application_id` unique FK, `ON DELETE RESTRICT`), created by `services/certificates.py: issue()` — never through `transition()`. `certificate_number` = `LM-CERT-{UTC year}-{nextval('certificate_number_seq'):06d}`. `snapshot` (JSONB) freezes the instrument/business/approver fields shown on the PDF at issuance time — a deliberate JSONB blob, not relational rows like the checklist (it's one immutable bundle written once and always read whole, the opposite case from spec 06's checklist items), needed because the instrument unlocks (editable again) the moment the application reaches this terminal status. `valid_from`/`valid_until` = issue date + `CERTIFICATE_VALIDITY_YEARS` (Settings field, default 2 — ASSUMPTION, not a real Legal Metrology rule). `status` starts `VALID`; the expiry job (step 10) is the only thing that ever moves it to `EXPIRED`, and `issue()` itself is the only thing that ever moves an *older* certificate to `SUPERSEDED` (step 13, see below) — `REVOKED` has no writer anywhere yet (no revoke action exists). `pdf_path` = `certificates/{id}.pdf`, stored in the same single `SUPABASE_BUCKET` as documents (no new bucket). `data_hash`: SHA-256 hex of a fixed pipe-joined string of the certificate's own fields (`app/services/certificates.py: _data_hash()`) — a tamper-evidence fingerprint, not a cryptographic file signature (root `CLAUDE.md`'s "hash-based in MVP" decision). No `qr_token` column: the QR/public URL encodes `certificate_number` directly (see QR section below). `reminder_30d_sent_at`/`reminder_7d_sent_at` (migration `0007`, nullable `Date`): the expiry job's idempotency mechanism (see Expiry job below) — `NULL` means "not yet sent," never re-derived from a log. `supersedes_certificate_id`/`superseded_by_certificate_id` (migration `0010`, spec `docs/specs/13-certificate-superseding.md`): nullable self-referential FKs, `ON DELETE SET NULL`, both `NULL` for every certificate issued before `0010` (no backfill — same "an honest NULL beats a fabricated value" reasoning as spec 14's `verification_mode`). Set only by `issue()`, in the same transaction as the new row's insert.
+
+- `payments` (spec `docs/specs/12-payments.md`, migration `0011`): one row per application
+  (`application_id` unique FK, `ON DELETE CASCADE` — unlike `certificates`' `RESTRICT`, since a
+  mocked payment has no independent reason to outlive its application and an application can still
+  be deleted while `DRAFT`), created **lazily** by `POST /applications/{id}/mock-pay` — unlike
+  `inspections`/`certificates` (created by the lifecycle itself the instant an application reaches
+  a given status), most applications never get a `payments` row at all;
+  `ApplicationDetail.payment` is `null` until the first mock-pay call, not a zero-value row.
+  `amount` (`Numeric(10,2)`, nullable): no real payment gateway or fee schedule exists in this MVP
+  (ASSUMPTION), so `mock_pay()` never sets it — left for a real integration to populate later.
+  `status` (`payment_status` enum: `NOT_PAID`/`PENDING`/`PAID`, default `NOT_PAID`) and `paid_at`
+  (nullable timestamptz, set only once `status` becomes `PAID`). **This table is purely
+  informational — deliberately, by explicit user decision, not an oversight:** no status
+  transition in `services/applications.py: ALLOWED_TRANSITIONS`/`transition()` reads or checks
+  `payments` in any way; an application can reach `CERTIFICATE_ISSUED` with no `payments` row at
+  all. `mock_pay()` (`services/payments.py`) creates the row directly with `status=PAID` in a
+  single step (no gateway to await, so an intermediate `PENDING` write-then-flip would add a state
+  transition with no observable difference) and is idempotent: it locks the parent application row
+  first, so two racing calls for the same application can never both insert — the second always
+  sees the first's already-committed row. No `scope_payments()` helper exists: a payment is only
+  ever reached through its owning application (`applications_service.load()`'s existing scope), the
+  same reasoning `scope_certificates()`/`scope_inspections()` already use.
 
 - UUID primary keys everywhere. Human-readable IDs are for display only:
   - instrument `instrument_uid`: `LM-JH-DHN-000123`
@@ -278,6 +301,40 @@ DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
 
 Certificate status: `VALID` · `EXPIRED` · `REVOKED` · `SUPERSEDED` (step 13)
 
+### Payments — mocked, informational only (step 12, spec `docs/specs/12-payments.md`)
+- Resolves the long-open "Payments: mocked in MVP (`payments` table only)" decision (see
+  **Open decisions** below): the table plus a mock-pay action exist so the concept is visible in
+  the product, but **payment status gates nothing**. This was an explicit user decision, not
+  something left unfinished — `services/applications.py: ALLOWED_TRANSITIONS`/`transition()` is
+  untouched by this step; a test (`tests/test_payments.py::test_payment_never_gates_the_lifecycle`)
+  proves an application reaches `CERTIFICATE_ISSUED` with no `payments` row ever created.
+- `POST /api/applications/{id}/mock-pay` (`app/routers/applications.py`, `Owner` = `BUSINESS`
+  only) → `services/payments.py: mock_pay()`. Org scoping is inherited entirely from
+  `applications_service.load()` (out-of-org business → 404, never 403, same as every other
+  endpoint) — no separate `scope_payments()` helper, since a payment is only ever reached through
+  its owning application (same reasoning `scope_certificates()`/`scope_inspections()` use).
+- **Create-vs-upsert:** looks up the existing `Payment` row (if any) after locking the parent
+  `Application` row, and either inserts a new one or updates it — never both in the same call.
+  Idempotent by lock ordering, not a pre-check: two racing mock-pay calls for the same application
+  serialize on the application row lock, so the second always sees the first's committed row.
+  Already-`PAID` is a safe no-op (`paid_at` is left exactly as first set).
+- **Single-step, direct to `PAID`** (not `PENDING` then flipped): no real gateway exists to await,
+  so an intermediate write would add a state transition with no observable difference to any
+  caller. `PENDING` exists in the enum for a future real integration, but this action never
+  produces it.
+- **`amount` is left `null`/unset by `mock_pay()`** (ASSUMPTION): no fee schedule or real gateway
+  exists in this MVP to derive a number from; the column exists so a future real integration can
+  populate it without a schema change.
+- `ApplicationDetail.payment: PaymentOut | None` (`app/schemas/payment.py`) is `null` until the
+  first mock-pay call (the row is created lazily, not at application creation) — not exposed on
+  `ApplicationOut`, no dedicated `GET` endpoint (nothing to fetch independently; it's only ever
+  read alongside its application).
+- `GET /applications/meta`'s `payment_statuses` (`[{value, label}, ...]`) is the only place the
+  display labels are served (`app/core/payment_types.py: PAYMENT_STATUS_LABELS`) — the frontend
+  must never hardcode them, same rule every other backend-owned enum here follows.
+- Audit action: `PAYMENT_MOCKED` (`entity_type="application"`, `details.status`,
+  `details.created`).
+
 ### Scheduling (step 5, spec `docs/specs/05-officer-dashboard.md`)
 - `today()` in `core/clock.py` is the current date in `APP_TIMEZONE` (default `Asia/Kolkata`, ASSUMPTION), built on a separate `now_utc()` so tests can freeze time via `monkeypatch.setattr(clock, "now_utc", ...)` — there's no freezegun dependency. A UTC-only check would reject valid IST dates for up to 5h30m around midnight.
 - `scheduled_date` on `StatusChange` is required for, and only allowed for, target `SCHEDULED`; must be between `today()` and `today() + SCHEDULING_MAX_DAYS_AHEAD` (default 180, a typo guard).
@@ -365,11 +422,12 @@ GET   /api/inspections/meta      GET   /api/inspections/{id}
 PATCH /api/inspections/{id}      POST  /api/inspections/{id}/submit
 GET   /api/certificates/{id}     GET   /api/certificates/{id}/pdf
 POST  /api/applications/{id}/certificate   # LM_OFFICER only; issues a certificate while APPROVED
+POST  /api/applications/{id}/mock-pay      # BUSINESS (owner) only; mocked, informational-only payment (step 12)
 POST  /api/jobs/expiry-check     # requires X-Cron-Secret header, no rate limit (step 10)
 GET   /api/admin/certificates/stats            # ADMIN_ROLES; {valid, expiring_soon, expired, revoked, superseded}
 GET   /api/admin/certificates/expiring-soon    # ADMIN_ROLES; Page[CertificateOut], valid_until asc
 GET   /api/public/verify/{certificate_number}                     # no auth
-GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}, document_review_checklist (step 11), verification_modes (step 14)
+GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}, document_review_checklist (step 11), verification_modes (step 14), payment_statuses (step 12)
 CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
 GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 9 statuses zero-filled (step 11 adds DOCUMENTS_DEFICIENT)
 GET   /api/applications?sort=      # created_desc (default) | scheduled_asc

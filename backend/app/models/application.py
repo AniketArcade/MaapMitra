@@ -73,6 +73,11 @@ class Application(UUIDPk, Timestamps, Base):
     certificate: Mapped["Certificate | None"] = relationship(  # noqa: F821
         lazy="raise", uselist=False, passive_deletes=True
     )
+    # Spec 12: created lazily by POST /applications/{id}/mock-pay, unlike inspection/certificate
+    # above (both created by the lifecycle itself) — most applications never get a row at all.
+    payment: Mapped["Payment | None"] = relationship(  # noqa: F821
+        lazy="raise", uselist=False, passive_deletes=True
+    )
 
     __table_args__ = (
         # One active (non-terminal) application per instrument. Race-free.

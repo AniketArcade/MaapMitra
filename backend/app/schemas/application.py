@@ -20,6 +20,7 @@ from app.core.application_types import (
 from app.core.config import get_settings
 from app.core.document_review_templates import DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
 from app.core.instrument_types import CapacityUnit, InstrumentType
+from app.core.payment_types import PAYMENT_STATUS_LABELS, PaymentStatus
 from app.core.roles import Role
 from app.core.verification_types import VERIFICATION_MODE_LABELS, VerificationMode
 from app.models.application import Application
@@ -28,6 +29,7 @@ from app.models.user import User
 from app.schemas.certificate import CertificateOut
 from app.schemas.common import StrictModel
 from app.schemas.document import DocumentOut
+from app.schemas.payment import PaymentOut
 
 Notes = Annotated[str, StringConstraints(strip_whitespace=True, max_length=1000)]
 
@@ -180,6 +182,9 @@ class ApplicationDetail(ApplicationOut):
     allowed_actions: list[ApplicationStatus]
     inspection: InspectionOut | None
     certificate: CertificateOut | None
+    # Spec 12: `null` until POST /applications/{id}/mock-pay is first called (the row is created
+    # lazily, not at application creation) — informational only, never gates any transition below.
+    payment: PaymentOut | None
     can_reschedule: bool
     review_checklist: list[ReviewChecklistItemOut]
 
@@ -238,6 +243,7 @@ class ApplicationDetail(ApplicationOut):
                 else None
             ),
             certificate=CertificateOut.from_model(a.certificate) if a.certificate else None,
+            payment=PaymentOut.from_model(a.payment) if a.payment else None,
             # Scope already implies jurisdiction: reaching this point means the caller may read it.
             can_reschedule=(
                 a.status == ApplicationStatus.SCHEDULED and user.role == Role.LM_OFFICER
@@ -291,6 +297,9 @@ class ApplicationMeta(BaseModel):
     scheduling: SchedulingMeta
     document_review_checklist: list[ReviewChecklistTemplateItem]
     verification_modes: list[LabelledValue]
+    # Spec 12: PaymentStatus is a backend-owned enum (app/core/payment_types.py) the frontend must
+    # never hardcode, same rule every other enum on this schema already follows.
+    payment_statuses: list[LabelledValue]
 
     @classmethod
     def build(cls) -> Self:
@@ -323,5 +332,8 @@ class ApplicationMeta(BaseModel):
             ],
             verification_modes=[
                 LabelledValue(value=m, label=VERIFICATION_MODE_LABELS[m]) for m in VerificationMode
+            ],
+            payment_statuses=[
+                LabelledValue(value=p, label=PAYMENT_STATUS_LABELS[p]) for p in PaymentStatus
             ],
         )
