@@ -23,6 +23,14 @@ IDENTITY_LOCKED = frozenset(
         # let a business "regame" the office/on-site routing decision after the fact, even though
         # the current application's own verification_mode wouldn't retroactively change either way.
         "transportable",
+        # Spec 16: category_id/category_values join IDENTITY_LOCKED for the same reason as
+        # transportable just above — an application snapshot's own understanding of "what kind of
+        # instrument is this" shouldn't have its underlying instrument's category (or the filled-in
+        # values that describe it) silently change out from under it while a non-terminal
+        # application is in progress. Locked/unlocked as a pair, same as the create/update schema
+        # pairing rule (schemas/instrument.py) — never one without the other.
+        "category_id",
+        "category_values",
     }
 )
 # address / latitude / longitude lock only once an inspection is scheduled: a business can

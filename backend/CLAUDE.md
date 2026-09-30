@@ -111,6 +111,7 @@ Workflow for every schema change:
 | `0009` | transportability and verification mode (`instruments.transportable` boolean, NOT NULL, `server_default(true())`; new `verification_mode` enum type; `applications.verification_mode`, nullable) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/14-transportability.md`) |
 | `0010` | certificate superseding (`certificate_status` enum gains `SUPERSEDED`; `certificates.supersedes_certificate_id` / `superseded_by_certificate_id`, both nullable self-referential FKs, `ON DELETE SET NULL`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/13-certificate-superseding.md`) |
 | `0011` | payments (`payments` table: `application_id` unique FK `ON DELETE CASCADE`, `amount` nullable `Numeric(10,2)`, new `payment_status` enum `NOT_PAID`/`PENDING`/`PAID` default `NOT_PAID`, `paid_at` nullable timestamptz) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/12-payments.md`) |
+| `0012` | instrument categories (`instrument_categories` table: smallint PK 1-33, `name`, `validity_months`, `field_schema` JSONB, seeded with 33 rows in this same migration; `instruments` gains nullable `category_id` smallint FK `ON DELETE SET NULL` + nullable `category_values` JSONB) | 🛑 **NOT YET APPLIED TO SUPABASE — AND MUST NOT BE, UNTIL THE USER HAS REVIEWED THE SEEDED CATEGORY CONTENT.** This is not the routine "written and tested locally, apply later" note every other row above carries — the 33 seeded rows are ported from a separate prototype repo's own invented-but-plausible fixture data (see `docs/specs/16-instrument-categories.md` for the full disclaimer and the category list) and need a **content** review, not just a code review, before this migration ever touches the real database. |
 
 ## Layering rules
 
@@ -131,7 +132,8 @@ Workflow for every schema change:
 
 ## Data model
 
-Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications`, `documents`, `inspections`,
+Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `instrument_categories` (step 16,
+see below), `applications`, `documents`, `inspections`,
 `inspection_checklist_items`, `inspection_measurements`, `document_review_checklist_items`,
 `certificates`, `payments` (mocked, informational only — step 12, see below), `audit_logs`
 
@@ -151,6 +153,21 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
     snapshotted onto the Application at creation, so it locks for the same duration to keep the
     instrument's live value from drifting out of sync with an in-progress application's frozen
     snapshot.
+  - `category_id` / `category_values` (spec `docs/specs/16-instrument-categories.md`, migration
+    `0012`, 🛑 not yet applied to Supabase, content pending user review): an additive, optional,
+    richer category system that sits **alongside** `instrument_type`/`capacity`/`capacity_unit`/
+    `accuracy_class` above, not instead of them — every pre-existing instrument keeps
+    `category_id = NULL` and works entirely unaffected. `category_id` (nullable smallint FK ->
+    `instrument_categories.id`, `ON DELETE SET NULL`) and `category_values` (nullable JSONB, the
+    filled-in values keyed by each category's `field_schema` entry's `key`) are a **paired**
+    field: `InstrumentCreate`/`InstrumentUpdate` reject one being set without the other (see
+    `schemas/instrument.py: _category_pair_valid`/`category_fields_sent_together`). Both join
+    `IDENTITY_LOCKED` for the same "snapshotted, don't let it drift mid-application" reasoning as
+    `transportable`. Validation is **top-level required-field-presence only** (deliberate MVP
+    scope, see the spec's Decisions): `services/instruments.py: _validate_category()` checks that
+    every `field_schema` entry with `required: true` has a corresponding non-null key in
+    `category_values` — repeater-row contents, range-band (Qmin < Qt < Qmax) ordering, and
+    unit-option membership are explicitly **not** validated.
 - `applications` (spec `docs/specs/03-applications.md`):
   - `application_number` = `APP-{UTC year}-{nextval('application_number_seq'):06d}`, display only.
   - One active (non-terminal) application per instrument: partial unique index `ux_applications_active_instrument`.
@@ -335,6 +352,53 @@ Certificate status: `VALID` · `EXPIRED` · `REVOKED` · `SUPERSEDED` (step 13)
 - Audit action: `PAYMENT_MOCKED` (`entity_type="application"`, `details.status`,
   `details.created`).
 
+### Instrument categories (step 16, spec `docs/specs/16-instrument-categories.md`)
+
+🛑 **Migration `0012` is NOT applied to Supabase and must not be until a human reviews the
+seeded category content** (names, fields, options, units) — see the migration table above and the
+spec doc for the full disclaimer. This is content review, not just code review.
+
+- `instrument_categories` (new table): 33 rows, `id` a **smallint primary key 1-33** (not the
+  usual `UUIDPk` — a small, fixed, numbered reference set, mirrored from a separate prototype
+  repo's own stable category numbering), `name`, `validity_months` (mock; never used to compute
+  real legal validity, same caveat every other mock validity value in this codebase carries),
+  `field_schema` (JSONB array of field definitions — see `app/schemas/instrument_category.py:
+  CategoryFieldSchema` for the exact snake_case shape: `key, label, type, required, unit,
+  unit_options, options, presets, repeater_label, repeater_fields, min, max, help_text`).
+  **Seeded directly in migration `0012`** (`op.bulk_insert`), not via `app/seed.py`/
+  `database/seed/`: this is reference/taxonomy data the app needs to function in every
+  environment (like `app/core/regions.py`'s `REGIONS`, but promoted to a real table), not
+  demo-only content — it must not be gated behind `app/seed.py`'s `ENV=production` guard.
+- `instruments.category_id` (nullable smallint FK -> `instrument_categories.id`, `ON DELETE SET
+  NULL`) / `instruments.category_values` (nullable JSONB, keyed by each category's field
+  `key`s): fully **additive** alongside `instrument_type`/`capacity`/`capacity_unit`/
+  `accuracy_class` — every pre-`0012` instrument keeps `category_id = NULL` and works entirely
+  unaffected; no backfill or mapping from the old enum onto the new categories was attempted.
+- **Paired, not independent**: `InstrumentCreate`/`InstrumentUpdate` reject `category_id` being
+  set without `category_values` (or vice versa) — `schemas/instrument.py:
+  _category_pair_valid()`/`category_fields_sent_together()`. Both are in `NULLABLE_FIELDS`, so an
+  explicit `null` on either is allowed and clears the category assignment entirely (both together,
+  never one alone).
+- **Validation scope — a deliberate MVP simplification, not an oversight**:
+  `services/instruments.py: _validate_category()` checks only that every `field_schema` entry
+  with `required: true` has a corresponding **non-null top-level key** in `category_values`.
+  Repeater-row contents (e.g. at least one weight in category 1's denominations), range-band
+  ordering (Qmin < Qt < Qmax, categories 17/26), and unit-option membership (e.g. rejecting a
+  `unit` outside a field's `unit_options`) are explicitly **not** validated by this step.
+- **`category_id`/`category_values` join `IDENTITY_LOCKED`** (`core/instrument_lock.py`) — same
+  reasoning as `transportable` (spec 14): an in-progress application's understanding of "what kind
+  of instrument is this" shouldn't have the underlying instrument's category silently change while
+  a non-terminal application exists.
+- `GET /instruments/meta`'s `categories` entry (`[{id, name, validity_months, field_schema}, ...]`)
+  is read live from the `instrument_categories` table (`app/routers/instruments.py: meta()`,
+  the one query added to that endpoint), not from a Python constant like `types`/`regions` on the
+  same response — the whole point of a real table is that a human can review/edit the category
+  content as data, without a code deploy, once this migration is eventually applied. A future
+  frontend's `DynamicFieldRenderer` reads this endpoint; it must never import a static category
+  list of its own.
+- No new endpoint. `category_id`/`category_values` ride the existing `POST/PATCH /instruments`
+  request/response schemas, exactly like spec 14's `transportable`.
+
 ### Scheduling (step 5, spec `docs/specs/05-officer-dashboard.md`)
 - `today()` in `core/clock.py` is the current date in `APP_TIMEZONE` (default `Asia/Kolkata`, ASSUMPTION), built on a separate `now_utc()` so tests can freeze time via `monkeypatch.setattr(clock, "now_utc", ...)` — there's no freezegun dependency. A UTC-only check would reject valid IST dates for up to 5h30m around midnight.
 - `scheduled_date` on `StatusChange` is required for, and only allowed for, target `SCHEDULED`; must be between `today()` and `today() + SCHEDULING_MAX_DAYS_AHEAD` (default 180, a typo guard).
@@ -414,7 +478,7 @@ Base `/api`. REST + JSON.
 GET   /api/health                # liveness; ?db=true also pings DB (503 if down)
 POST  /api/auth/{login,register,refresh,logout}   GET /api/auth/me
 POST  /api/users                 # SUPER_ADMIN only; creates officials
-GET   /api/instruments/meta      # types, units, accuracy classes, regions (any logged-in user)
+GET   /api/instruments/meta      # types, units, accuracy classes, regions, categories (step 16) (any logged-in user)
 CRUD  /api/instruments           # write: BUSINESS (own org); read: + officials in jurisdiction; GATC 403
 CRUD  /api/applications          PATCH /api/applications/{id}/status
 POST  /api/documents             GET   /api/documents/{id}/url     # signed URL

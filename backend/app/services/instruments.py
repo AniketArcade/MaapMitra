@@ -14,6 +14,7 @@ from app.core.instrument_lock import IDENTITY_LOCKED, LOCATION_LOCK_MESSAGE, loc
 from app.core.instrument_types import TYPE_LABELS, UNIT_FAMILY, CapacityUnit, InstrumentType
 from app.core.regions import is_valid_region, is_valid_state
 from app.models.instrument import MFR_SERIAL_INDEX, Instrument, instrument_uid_seq
+from app.models.instrument_category import InstrumentCategory
 from app.models.user import User
 from app.schemas.instrument import InstrumentCreate, InstrumentUpdate
 from app.services import audit
@@ -50,6 +51,34 @@ def _validate(
         raise Unprocessable("Unknown state", field="state_code")
     if not is_valid_region(state_code, district_code):
         raise Unprocessable("Unknown district for this state", field="district_code")
+
+
+def _validate_category(
+    db: Session, category_id: int | None, category_values: dict[str, Any] | None
+) -> None:
+    """Spec 16 §7: deliberately a top-level required-field-presence check only — every
+    `field_schema` entry with `required: true` must have a corresponding non-null key in
+    `category_values`. Deep validation of repeater-row contents, range-band (Qmin < Qt < Qmax)
+    ordering, or unit-option membership is explicitly OUT OF SCOPE for this step (see
+    `docs/specs/16-instrument-categories.md` §7 D-required-scope) — a deliberate MVP
+    simplification, not an oversight.
+    """
+    if category_id is None:
+        return  # schema layer already guarantees category_values is None too
+    category = db.get(InstrumentCategory, category_id)
+    if category is None:
+        raise Unprocessable("Unknown instrument category", field="category_id")
+    values = category_values or {}
+    missing = [
+        f["key"]
+        for f in category.field_schema
+        if f.get("required") and values.get(f["key"]) is None
+    ]
+    if missing:
+        raise Unprocessable(
+            f"Missing required fields for this category: {', '.join(missing)}",
+            field="category_values",
+        )
 
 
 def _flush_or_conflict(db: Session) -> None:
@@ -92,6 +121,7 @@ def create(db: Session, user: User, body: InstrumentCreate, *, ip: str) -> Instr
         state_code=state,
         district_code=district,
     )
+    _validate_category(db, body.category_id, body.category_values)
 
     seq = db.scalar(select(instrument_uid_seq.next_value()))
     instrument = Instrument(
@@ -217,6 +247,10 @@ def update(
         for field in ("capacity_unit", "latitude", "longitude", "state_code", "district_code")
     }
     _validate(instrument_type=instrument.instrument_type, **merged)
+    if "category_id" in changes:
+        _validate_category(
+            db, changes["category_id"][1], changes.get("category_values", (None, None))[1]
+        )
 
     for field, (_, new) in changes.items():
         setattr(instrument, field, new)
