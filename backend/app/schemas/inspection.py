@@ -6,6 +6,7 @@ from typing import Annotated, Self
 from pydantic import BaseModel, Field
 
 from app.core.application_types import MAX_EVIDENCE_PHOTOS
+from app.core.gatc_types import InspectionAssigneeRole
 from app.core.inspection_templates import (
     CHECKLIST_TEMPLATES,
     MEASUREMENT_TEMPLATES,
@@ -79,6 +80,7 @@ class InspectionDetail(BaseModel):
     application_id: uuid.UUID
     scheduled_date: date
     assigned_officer_name: str
+    assignee_role: InspectionAssigneeRole  # spec 15
     checklist_items: list[ChecklistItemOut]
     measurements: list[MeasurementOut]
     evidence: list[DocumentOut]
@@ -101,6 +103,7 @@ class InspectionDetail(BaseModel):
             application_id=inspection.application_id,
             scheduled_date=inspection.scheduled_date,
             assigned_officer_name=inspection.assigned_officer.full_name,
+            assignee_role=inspection.assignee_role,
             checklist_items=[ChecklistItemOut.from_model(i) for i in checklist_items],
             measurements=[MeasurementOut.from_model(m) for m in measurements],
             evidence=evidence,

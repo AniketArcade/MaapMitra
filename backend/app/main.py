@@ -15,6 +15,7 @@ from app.routers import (
     auth,
     certificates,
     documents,
+    gatc,
     health,
     inspections,
     instruments,
@@ -78,6 +79,7 @@ def create_app() -> FastAPI:
         public.router,
         jobs.router,
         admin.router,
+        gatc.router,
     ):
         app.include_router(router, prefix="/api")
     return app

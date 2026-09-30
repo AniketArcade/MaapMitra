@@ -18,6 +18,7 @@ from app.core.application_types import (
 from app.core.config import get_settings
 from app.core.document_review_templates import DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
 from app.core.errors import Conflict, Forbidden, NotFound, Unprocessable
+from app.core.gatc_types import InspectionAssigneeRole
 from app.core.inspection_templates import (
     CHECKLIST_TEMPLATES,
     MEASUREMENT_TEMPLATES,
@@ -45,6 +46,7 @@ from app.schemas.application import (
     StatusChange,
 )
 from app.services import audit
+from app.services import gatc as gatc_service
 from app.services import inspections as inspections_service
 from app.services import instruments as instruments_service
 from app.services.scoping import scope_applications
@@ -69,9 +71,12 @@ ALLOWED_TRANSITIONS: dict[tuple[ApplicationStatus, ApplicationStatus], Edge] = {
     (S.DOCUMENT_REVIEW, S.DOCUMENTS_DEFICIENT): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
     (S.DOCUMENTS_DEFICIENT, S.SUBMITTED): Edge(frozenset({Role.BUSINESS}), enabled=True),
     (S.DOCUMENT_REVIEW, S.SCHEDULED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
-    (S.SCHEDULED, S.INSPECTION): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
-    (S.INSPECTION, S.APPROVED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
-    (S.INSPECTION, S.REJECTED): Edge(frozenset({Role.LM_OFFICER}), enabled=True),
+    # Step 15: GATC added to the three inspection-stage edges below — a GATC-role user reaches
+    # them only once assigned (Inspection.assigned_officer_id), scheduling remains LM_OFFICER-only
+    # above (a GATC org/user is a *target* of scheduling, never the one who schedules).
+    (S.SCHEDULED, S.INSPECTION): Edge(frozenset({Role.LM_OFFICER, Role.GATC}), enabled=True),
+    (S.INSPECTION, S.APPROVED): Edge(frozenset({Role.LM_OFFICER, Role.GATC}), enabled=True),
+    (S.INSPECTION, S.REJECTED): Edge(frozenset({Role.LM_OFFICER, Role.GATC}), enabled=True),
     # System only: happens inside certificate creation (step 8), never via PATCH.
     (S.APPROVED, S.CERTIFICATE_ISSUED): Edge(frozenset(), enabled=False),
 }
@@ -403,6 +408,11 @@ def transition(
             field="note",
         )
     scheduled_date: date | None = None
+    # Step 15: who the Inspection row (created below) will be assigned to. Defaults to
+    # self-assigning the scheduling officer — completely unchanged from before this step — unless
+    # the request names a GATC organization/user, resolved and validated below.
+    assignee_user = user
+    assignee_role = InspectionAssigneeRole.LM_OFFICER
     if target == S.SCHEDULED:
         scheduled_date = _validate_scheduled_date(body.scheduled_date)
         # Step 11: can't schedule until the officer has worked through the whole document
@@ -419,10 +429,23 @@ def transition(
         )
         if unchecked:
             raise Conflict(f"Document review checklist incomplete: {', '.join(unchecked)}")
-    elif body.scheduled_date is not None:
-        raise Unprocessable(
-            "scheduled_date is only allowed when scheduling an inspection", field="scheduled_date"
-        )
+        if body.gatc_organization_id is not None:
+            assert body.gatc_user_id is not None  # StatusChange.gatc_pair_valid already enforces
+            assignee_user = gatc_service.resolve_gatc_assignment(
+                db, user, application, body.gatc_organization_id, body.gatc_user_id
+            )
+            assignee_role = InspectionAssigneeRole.GATC
+    else:
+        if body.scheduled_date is not None:
+            raise Unprocessable(
+                "scheduled_date is only allowed when scheduling an inspection",
+                field="scheduled_date",
+            )
+        if body.gatc_organization_id is not None:
+            raise Unprocessable(
+                "gatc_organization_id is only allowed when scheduling an inspection",
+                field="gatc_organization_id",
+            )
     if target == S.SUBMITTED:
         present = set(
             db.scalars(
@@ -477,13 +500,14 @@ def transition(
         inspection = Inspection(
             application_id=application.id,
             scheduled_date=scheduled_date,
-            assigned_officer_id=user.id,
+            assigned_officer_id=assignee_user.id,
+            assignee_role=assignee_role,
         )
         db.add(inspection)
         # Keep the already-loaded (lazy="raise") relationship in sync in-memory: the caller's
         # returned `application` was loaded before this row existed, and expire_on_commit=False
         # means it would otherwise never see it without a fresh query.
-        inspection.assigned_officer = user
+        inspection.assigned_officer = assignee_user
         application.inspection = inspection
         audit.log(
             db,
@@ -492,7 +516,11 @@ def transition(
             entity_type="application",
             entity_id=application.id,
             organization_id=application.organization_id,
-            details={"scheduled_date": scheduled_date.isoformat()},
+            details={
+                "scheduled_date": scheduled_date.isoformat(),
+                "assignee_role": assignee_role.value,
+                "assigned_officer_id": str(assignee_user.id),
+            },
             ip=ip,
         )
     if target == S.DOCUMENT_REVIEW:

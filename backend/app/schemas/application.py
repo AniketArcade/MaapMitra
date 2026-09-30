@@ -19,6 +19,7 @@ from app.core.application_types import (
 )
 from app.core.config import get_settings
 from app.core.document_review_templates import DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
+from app.core.gatc_types import InspectionAssigneeRole
 from app.core.instrument_types import CapacityUnit, InstrumentType
 from app.core.payment_types import PAYMENT_STATUS_LABELS, PaymentStatus
 from app.core.roles import Role
@@ -57,6 +58,22 @@ class StatusChange(StrictModel):
     status: ApplicationStatus
     note: Notes | None = None
     scheduled_date: date | None = None  # required for, and only for, target SCHEDULED
+    # Spec 15: optional GATC routing, allowed only for target SCHEDULED (enforced in
+    # services/applications.py: transition(), mirroring scheduled_date's own restriction).
+    # Omitting both (the default) self-assigns the scheduling LM_OFFICER, exactly as before this
+    # step. Providing one without the other is rejected here, at the schema layer, before any
+    # DB-dependent check runs — mirrors InstrumentCreate/Update's category_id/category_values
+    # pairing (spec 16).
+    gatc_organization_id: uuid.UUID | None = None
+    gatc_user_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def gatc_pair_valid(self) -> Self:
+        if (self.gatc_organization_id is None) != (self.gatc_user_id is None):
+            raise ValueError(
+                "gatc_organization_id and gatc_user_id must both be provided, or both omitted"
+            )
+        return self
 
 
 class InspectionReschedule(StrictModel):
@@ -161,6 +178,10 @@ class InspectionOut(BaseModel):
     id: uuid.UUID
     scheduled_date: date
     assigned_officer_name: str
+    # Spec 15: which of the two assignable roles this is — raw enum, matching this schema's own
+    # convention for status/application_type/verification_mode (the value itself, not a label;
+    # LM_OFFICER/GATC need no *_LABELS dict, same precedent ChecklistResult already sets).
+    assignee_role: InspectionAssigneeRole
     submitted_at: datetime | None
     checklist_summary: ChecklistSummary | None
 
@@ -228,6 +249,7 @@ class ApplicationDetail(ApplicationOut):
                     id=a.inspection.id,
                     scheduled_date=a.inspection.scheduled_date,
                     assigned_officer_name=a.inspection.assigned_officer.full_name,
+                    assignee_role=a.inspection.assignee_role,
                     submitted_at=a.inspection.submitted_at,
                     checklist_summary=(
                         ChecklistSummary(

@@ -104,6 +104,19 @@ the officer inspects and approves → `CERT-2026-000123` with QR is issued → a
   (proven by `backend/tests/test_payments.py::test_payment_never_gates_the_lifecycle`). See
   `backend/CLAUDE.md`'s "Payments — mocked, informational only" subsection for the full
   implementation.
-- [ ] GATC workflow depth: minimal
+- [x] GATC workflow depth: **resolved (step 15, `docs/specs/15-gatc-eligibility.md`) as "minimal
+  but real."** A `GATC`-role user is a genuine, category-gated `assigned_officer_id` on an
+  `Inspection` — `organizations.gatc_eligible_category_ids` (which `instrument_categories` a GATC
+  org is approved to test) plus a new `GET /api/gatc/eligible` allocation lookup let a scheduling
+  `LM_OFFICER` route a `DOCUMENT_REVIEW → SCHEDULED` transition to a specific GATC user instead of
+  always self-assigning — gated on the org being category-eligible **and** the application's
+  `verification_mode == OFFICE_TEST_CENTRE` (spec 14; an `ON_SITE` application can never go to a
+  GATC test centre). Once assigned, that GATC user flows through the **exact same, unmodified**
+  inspection/checklist/measurement/approve-reject machinery an `LM_OFFICER` already uses — no
+  parallel GATC-specific workflow was built. GATC still never stamps or issues a certificate (that
+  stays `LM_OFFICER`-only, unchanged). See `backend/CLAUDE.md`'s "GATC eligibility + allocation"
+  subsection for the full implementation, including why this required new per-request router
+  dependencies (not just adding `GATC` to existing role-sets) to avoid changing any pre-existing
+  RBAC test's expected status code for an unrelated GATC caller.
 - [ ] Cron runner: Render Cron vs GitHub Actions
 - [ ] Digital signature: hash-based in MVP, government e-sign later

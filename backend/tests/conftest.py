@@ -92,6 +92,7 @@ def make_user(db: Session) -> Callable[..., User]:
         *,
         org_state: str = "JH",
         org_district: str = "DHN",
+        gatc_eligible_category_ids: list[int] | None = None,
         **kw: object,
     ) -> User:
         org = None
@@ -101,6 +102,10 @@ def make_user(db: Session) -> Callable[..., User]:
                 name=f"Org {uuid.uuid4().hex[:6]}",
                 state_code=org_state,
                 district_code=org_district,
+                # Spec 15: only meaningful (and only ever set here) for role=GATC.
+                gatc_eligible_category_ids=(
+                    gatc_eligible_category_ids if role == Role.GATC else None
+                ),
             )
         scope: dict[str, object] = {}
         if role == Role.STATE_ADMIN:

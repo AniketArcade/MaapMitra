@@ -112,6 +112,7 @@ Workflow for every schema change:
 | `0010` | certificate superseding (`certificate_status` enum gains `SUPERSEDED`; `certificates.supersedes_certificate_id` / `superseded_by_certificate_id`, both nullable self-referential FKs, `ON DELETE SET NULL`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/13-certificate-superseding.md`) |
 | `0011` | payments (`payments` table: `application_id` unique FK `ON DELETE CASCADE`, `amount` nullable `Numeric(10,2)`, new `payment_status` enum `NOT_PAID`/`PENDING`/`PAID` default `NOT_PAID`, `paid_at` nullable timestamptz) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/12-payments.md`) |
 | `0012` | instrument categories (`instrument_categories` table: smallint PK 1-33, `name`, `validity_months`, `field_schema` JSONB, seeded with 33 rows in this same migration; `instruments` gains nullable `category_id` smallint FK `ON DELETE SET NULL` + nullable `category_values` JSONB) | 🛑 **NOT YET APPLIED TO SUPABASE — AND MUST NOT BE, UNTIL THE USER HAS REVIEWED THE SEEDED CATEGORY CONTENT.** This is not the routine "written and tested locally, apply later" note every other row above carries — the 33 seeded rows are ported from a separate prototype repo's own invented-but-plausible fixture data (see `docs/specs/16-instrument-categories.md` for the full disclaimer and the category list) and need a **content** review, not just a code review, before this migration ever touches the real database. |
+| `0013` | GATC eligibility (`organizations.gatc_eligible_category_ids`, nullable JSONB array of `instrument_categories.id`, CHECK constrained to `type=GATC` orgs only) + `inspections.assignee_role` (new `inspection_assignee_role` enum, NOT NULL, backfilled `LM_OFFICER` for every pre-existing row) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/15-gatc-eligibility.md`) |
 
 ## Layering rules
 
@@ -138,6 +139,13 @@ see below), `applications`, `documents`, `inspections`,
 `certificates`, `payments` (mocked, informational only — step 12, see below), `audit_logs`
 
 - `users`: DB check constraints tie `role` to `organization_id` (BUSINESS/GATC need one, officials must not) and require `state_code`/`district_code` for officials.
+- `organizations`: `gatc_eligible_category_ids` (step 15, migration `0013`, 🛑 not yet applied to
+  Supabase): nullable JSONB array of `instrument_categories.id` values, meaningful only for
+  `type=GATC` orgs (CHECK-constrained). `none_as_null=True` on the SQLAlchemy type — without it a
+  Python `None` writes as `'null'::jsonb`, not SQL `NULL`, which silently fails both the CHECK
+  constraint and `services/gatc.py: list_eligible()`'s own `IS NULL` filtering (caught by a real
+  Postgres `CheckViolation` in the first test run). No write endpoint exists yet — configured
+  directly in the database until a future org-management step (spec `docs/specs/15-gatc-eligibility.md`).
 - `refresh_tokens`: SHA-256 `token_hash` only, never the raw token.
 - `audit_logs`: append-only. Write rows through `services/audit.log(db, *, actor, action, entity_type, entity_id, organization_id, details, ip)` in the caller's transaction. Routers pass `ip=get_client_ip(request)`.
 - `instruments` (spec `docs/specs/02-instruments.md`, lock activated by `docs/specs/05-officer-dashboard.md`):
@@ -184,7 +192,7 @@ see below), `applications`, `documents`, `inspections`,
   - **Officials never see DRAFT applications or their documents** (`scope_applications`).
   - `scheduled_date` on `ApplicationOut`/`ApplicationDetail.inspection` comes from a LEFT JOIN/`contains_eager` on `inspections`, never a per-row query.
 - `documents`: `storage_path` = `applications/{application_id}/{document_id}.{pdf|jpg|png}` (never a URL, never the user's filename). `content_type` is the **sniffed** type. Max 10 per application.
-- `inspections` (spec `docs/specs/05-officer-dashboard.md`, extended by `docs/specs/06-inspection-checklist.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign only in step 5: always the officer who scheduled it; also the only officer who may start/edit/submit the field inspection, step 6 D1). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` doubles as the "my inspections" list: `GET /applications?status=INSPECTION&sort=scheduled_asc`. Step 6 adds `overall_remarks` (text, null), `submitted_at` (timestamptz, null — the single source of truth for "this checklist is locked"), `submitted_by` (FK → users, `ON DELETE RESTRICT`, null).
+- `inspections` (spec `docs/specs/05-officer-dashboard.md`, extended by `docs/specs/06-inspection-checklist.md` and `docs/specs/15-gatc-eligibility.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign in step 5 — always the officer who scheduled it — **or**, since step 15, a specific `GATC`-role user the scheduling officer explicitly routed to; either way the only person who may start/edit/submit the field inspection, step 6 D1/step 15). `assignee_role` (step 15, migration `0013`, 🛑 not yet applied to Supabase): `inspection_assignee_role` enum (`LM_OFFICER`/`GATC`), `NOT NULL`, backfilled `LM_OFFICER` for every pre-existing row (a known fact, not a guess — see the spec's D4) — denormalized so reporting/dashboards never need a join to `users.role`; set once at assignment and never re-validated (safe: no endpoint anywhere ever mutates `users.role` after creation). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` doubles as the "my inspections" list: `GET /applications?status=INSPECTION&sort=scheduled_asc`. Step 6 adds `overall_remarks` (text, null), `submitted_at` (timestamptz, null — the single source of truth for "this checklist is locked"), `submitted_by` (FK → users, `ON DELETE RESTRICT`, null).
 - `inspection_checklist_items` / `inspection_measurements` (spec `docs/specs/06-inspection-checklist.md`): one row per `CHECKLIST_TEMPLATES`/`MEASUREMENT_TEMPLATES` entry for the instrument's type (`core/inspection_templates.py`, ASSUMPTION — illustrative demo content), **snapshotted** when the inspection starts (`SCHEDULED → INSPECTION`) so a later template edit never changes an in-progress or already-submitted inspection. `inspection_checklist_items.result` is a nullable `checklist_result` enum (`PASS`/`FAIL`/`NA`); `inspection_measurements.expected_value` is `instrument.capacity * fraction` computed at start time, `observed_value` filled by the officer. Both `ON DELETE CASCADE` from `inspections`, unique on `(inspection_id, item_key)` / `(inspection_id, label)`.
 - `document_review_checklist_items` (spec `docs/specs/11-document-review-checklist.md`,
   migration `0008`): one row per `DOCUMENT_REVIEW_CHECKLIST_TEMPLATE` entry (`core/document_review_templates.py`,
@@ -399,6 +407,71 @@ spec doc for the full disclaimer. This is content review, not just code review.
 - No new endpoint. `category_id`/`category_values` ride the existing `POST/PATCH /instruments`
   request/response schemas, exactly like spec 14's `transportable`.
 
+### GATC eligibility + allocation (step 15, spec `docs/specs/15-gatc-eligibility.md`)
+
+🛑 **Migration `0013` is NOT applied to Supabase.** Resolves the root `CLAUDE.md`'s "GATC workflow
+depth: minimal" open decision as **minimal but real**: a `GATC`-role user becomes a genuine,
+category-gated `assigned_officer_id` on an `Inspection`, then flows through the exact same
+inspection/checklist/measurement/approve-reject machinery `LM_OFFICER` already uses — nothing is
+duplicated or forked for GATC.
+
+- `organizations.gatc_eligible_category_ids` / `inspections.assignee_role`: see the Data model
+  section above.
+- `GET /api/gatc/eligible?category_id=<id>` (`LM_OFFICER` only — the sole role that ever
+  schedules): GATC organizations, scoped to the caller's own jurisdiction
+  (`services/scoping.py: scope_organizations()`, mirrors `scope_instruments()`'s state/district
+  rule applied to `Organization` instead of `Instrument`), whose `gatc_eligible_category_ids`
+  contains `category_id`. `BUSINESS` is deliberately excluded (a business never chooses its own
+  routing; the list would leak GATC org names/jurisdictions with no action the caller could take)
+  and so are admin roles (they don't schedule; this is a live operational lookup, not a reporting
+  surface).
+- `GET /api/gatc/{organization_id}/users` (`LM_OFFICER` only): the active `GATC`-role users of one
+  organization, so the officer can name a specific person, not just an org — mirrors
+  `assigned_officer_id`'s existing "a specific person" semantics (spec 06 D1). Out-of-scope/
+  non-GATC org → 404, the ordinary GET-by-id convention.
+- `DOCUMENT_REVIEW → SCHEDULED` extended: `StatusChange` gains optional, paired
+  `gatc_organization_id`/`gatc_user_id`. Omitting both self-assigns the scheduling `LM_OFFICER`,
+  **completely unchanged** from before this step. Providing both routes to that specific GATC user
+  instead, via `services/gatc.py: resolve_gatc_assignment()`, which enforces (a) the org is
+  `type=GATC` and in the officer's own jurisdiction, (b) the application's *instrument* has a
+  non-null `category_id` present in that org's `gatc_eligible_category_ids` (an old-style,
+  pre-spec-16 application with no category can never use GATC routing), and (c) the application's
+  `verification_mode == OFFICE_TEST_CENTRE` (an `ON_SITE` application can never route to a GATC
+  test centre). A bad/nonexistent reference (unknown org/user, wrong org type, wrong jurisdiction,
+  inactive user, wrong org for that user) → 422; a legitimate reference blocked by a business rule
+  (category mismatch, `ON_SITE` mode) → 409 — see the spec's §5 for the full reasoning on this
+  split.
+- `SCHEDULED → INSPECTION`, `INSPECTION → APPROVED`, `INSPECTION → REJECTED` all gain `GATC` in
+  their `ALLOWED_TRANSITIONS` role set — no other change: the existing "must be the assigned
+  officer specifically" identity check (keyed on `assigned_officer_id == caller.id`, already
+  role-agnostic) and the existing "any in-scope officer may approve/reject once the checklist is
+  submitted" logic both generalize to GATC with zero further code changes.
+- `scope_applications()` gains a `GATC` branch — deliberately the **narrowest** of any role: not
+  jurisdiction-wide like `LM_OFFICER`, not org-wide like `BUSINESS`, but exactly the one
+  application (if any) this specific person is the `assigned_officer_id` of
+  (`Application.inspection.has(Inspection.assigned_officer_id == user.id)`, a correlated `EXISTS`,
+  never a join, so it can't collide with another caller path's own join to `Inspection`). A
+  consequence of this narrowness: "any in-scope GATC user" for approve/reject mechanically reduces
+  to "the one assigned GATC user" — no extra code enforces that, it falls out of the scoping rule.
+- **Router-level plumbing, not a role-set shortcut:** simply adding `GATC` to the existing `Reader`
+  dependencies on `GET/PATCH /applications/{id}...`/`GET/PATCH/POST /inspections/{id}...` would flip
+  an *unrelated* GATC caller's status from the pre-existing, test-pinned `403` to `404` (since
+  `scope_applications`'s "out of scope → 404" convention would then run for a role those endpoints
+  hadn't previously admitted at all). Instead, `routers/applications.py:
+  _reader_or_assigned_gatc()` and the analogous pair in `routers/inspections.py` check the path's
+  own `application_id`/`inspection_id` directly (`services/gatc.py:
+  is_assigned_gatc_for_application()`/`is_assigned_gatc_for_inspection()`) before falling through
+  to the original `Forbidden`. Every pre-existing role's behavior — and every pre-existing RBAC
+  test — is untouched; only the one specifically assigned GATC user is newly admitted, and only for
+  that one application/inspection. `GET /applications` (list), `GET /applications/stats`, and
+  evidence-photo upload/delete are deliberately left untouched (flat 403 for GATC, unchanged) —
+  none has a per-request id to gate on the way the endpoints above do, and evidence photos are
+  optional (a GATC inspection completes fully without them).
+- `InspectionOut`/`InspectionDetail` gain `assignee_role` (raw enum, no `*_LABELS` dict — same
+  precedent `ChecklistResult` already sets) alongside the existing assignee info.
+- No new audit action: `INSPECTION_SCHEDULED`'s existing `details` gains `assignee_role` and
+  `assigned_officer_id`.
+
 ### Scheduling (step 5, spec `docs/specs/05-officer-dashboard.md`)
 - `today()` in `core/clock.py` is the current date in `APP_TIMEZONE` (default `Asia/Kolkata`, ASSUMPTION), built on a separate `now_utc()` so tests can freeze time via `monkeypatch.setattr(clock, "now_utc", ...)` — there's no freezegun dependency. A UTC-only check would reject valid IST dates for up to 5h30m around midnight.
 - `scheduled_date` on `StatusChange` is required for, and only allowed for, target `SCHEDULED`; must be between `today()` and `today() + SCHEDULING_MAX_DAYS_AHEAD` (default 180, a typo guard).
@@ -498,6 +571,8 @@ GET   /api/applications?sort=      # created_desc (default) | scheduled_asc
 PATCH /api/applications/{id}/inspection   # LM_OFFICER only; reschedule while SCHEDULED
 PATCH /api/applications/{id}/review-checklist   # LM_OFFICER only, DOCUMENT_REVIEW only; toggle document-review checklist items (step 11)
 DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSPECTION evidence (step 6)
+GET   /api/gatc/eligible          # LM_OFFICER only; ?category_id=<id>, jurisdiction-scoped GATC orgs (step 15)
+GET   /api/gatc/{organization_id}/users   # LM_OFFICER only; active GATC-role users of one org (step 15)
 ```
 
 ### Public verify (step 9, spec `docs/specs/09-public-verify.md`; field list extended by step 13, spec `docs/specs/13-certificate-superseding.md`)
