@@ -21,6 +21,7 @@ from app.core.config import get_settings
 from app.core.document_review_templates import DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
 from app.core.instrument_types import CapacityUnit, InstrumentType
 from app.core.roles import Role
+from app.core.verification_types import VERIFICATION_MODE_LABELS, VerificationMode
 from app.models.application import Application
 from app.models.document_review_checklist import DocumentReviewChecklistItem
 from app.models.user import User
@@ -92,6 +93,10 @@ class ApplicationOut(BaseModel):
     organization_name: str
     state_code: str
     district_code: str
+    # Raw enum, nullable (spec 14): applications created before migration 0009 have no snapshot.
+    # Matches this schema's own convention for status/application_type — the raw value here,
+    # display labels served separately via ApplicationMeta.verification_modes.
+    verification_mode: VerificationMode | None
     business_notes: str | None
     submitted_at: datetime | None
     scheduled_date: date | None
@@ -120,6 +125,7 @@ class ApplicationOut(BaseModel):
             organization_name=a.organization.name,
             state_code=a.state_code,
             district_code=a.district_code,
+            verification_mode=a.verification_mode,
             business_notes=a.business_notes,
             submitted_at=a.submitted_at,
             scheduled_date=a.inspection.scheduled_date if a.inspection else None,
@@ -284,6 +290,7 @@ class ApplicationMeta(BaseModel):
     limits: UploadLimits
     scheduling: SchedulingMeta
     document_review_checklist: list[ReviewChecklistTemplateItem]
+    verification_modes: list[LabelledValue]
 
     @classmethod
     def build(cls) -> Self:
@@ -313,5 +320,8 @@ class ApplicationMeta(BaseModel):
             document_review_checklist=[
                 ReviewChecklistTemplateItem(key=i.key, label=i.label)
                 for i in DOCUMENT_REVIEW_CHECKLIST_TEMPLATE
+            ],
+            verification_modes=[
+                LabelledValue(value=m, label=VERIFICATION_MODE_LABELS[m]) for m in VerificationMode
             ],
         )

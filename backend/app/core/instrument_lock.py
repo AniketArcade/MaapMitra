@@ -17,6 +17,12 @@ IDENTITY_LOCKED = frozenset(
         "accuracy_class",
         "state_code",
         "district_code",
+        # Spec 14: joins state_code/district_code for the same reason — it's snapshotted onto
+        # the Application at creation (verification_mode), so letting it change mid-application
+        # would desync the instrument's live value from the application's frozen snapshot and
+        # let a business "regame" the office/on-site routing decision after the fact, even though
+        # the current application's own verification_mode wouldn't retroactively change either way.
+        "transportable",
     }
 )
 # address / latitude / longitude lock only once an inspection is scheduled: a business can

@@ -2,6 +2,7 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Enum,
     ForeignKey,
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Sequence,
     Text,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -45,6 +47,12 @@ class Instrument(UUIDPk, Timestamps, Base):
     accuracy_class: Mapped[AccuracyClass | None] = mapped_column(
         Enum(AccuracyClass, name="accuracy_class")
     )
+    # Spec 14: "Can the instrument be transported?" Drives the office/test-centre vs. on-site
+    # verification-mode snapshot taken on `Application` at creation (see
+    # `app/services/applications.py: create()`). Same server_default(true()) + NOT NULL pattern
+    # as `User.is_active`; migration 0009 adds it nullable first, backfills, then sets NOT NULL
+    # (see that migration's comment for why).
+    transportable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
     address: Mapped[str] = mapped_column(Text, nullable=False)
     state_code: Mapped[str] = mapped_column(Text, nullable=False)
     district_code: Mapped[str] = mapped_column(Text, nullable=False)

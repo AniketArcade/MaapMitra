@@ -24,6 +24,7 @@ from app.core.inspection_templates import (
     measurement_label,
 )
 from app.core.roles import Role
+from app.core.verification_types import verification_mode_for
 from app.models.application import (
     ACTIVE_INDEX,
     Application,
@@ -167,6 +168,10 @@ def create(db: Session, user: User, body: ApplicationCreate, *, ip: str) -> Appl
         status=S.DRAFT,
         state_code=instrument.state_code,
         district_code=instrument.district_code,
+        # Spec 14: snapshot instrument.transportable -> verification_mode at creation, same
+        # timing/reasoning as the state_code/district_code snapshot just above. A later change to
+        # the instrument's transportable never retroactively touches this application.
+        verification_mode=verification_mode_for(instrument.transportable),
         business_notes=body.business_notes or None,
         created_by=user.id,
         inspection=None,  # a brand-new application never has one; avoids a lazy="raise" trip
@@ -193,6 +198,7 @@ def create(db: Session, user: User, body: ApplicationCreate, *, ip: str) -> Appl
             "application_number": application.application_number,
             "instrument_uid": instrument.instrument_uid,
             "application_type": application.application_type.value,
+            "verification_mode": application.verification_mode.value,
         },
         ip=ip,
     )

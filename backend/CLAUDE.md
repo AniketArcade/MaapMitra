@@ -108,6 +108,7 @@ Workflow for every schema change:
 | `0006` | certificates (+ `certificate_number_seq`, `certificate_status` enum) | 2026-09-30 (no seed changes; issuance is driven live in the demo) |
 | `0007` | certificate reminders (`reminder_30d_sent_at`, `reminder_7d_sent_at`, both nullable `Date`) | 2026-09-30 (no seed changes; the expiry job is driven live in the demo) |
 | `0008` | document review checklist (`document_review_checklist_items`, `application_status` enum gains `DOCUMENTS_DEFICIENT`) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/11-document-review-checklist.md`) |
+| `0009` | transportability and verification mode (`instruments.transportable` boolean, NOT NULL, `server_default(true())`; new `verification_mode` enum type; `applications.verification_mode`, nullable) | **NOT YET APPLIED to Supabase** — written and tested locally against `lm_test` only (spec `docs/specs/14-transportability.md`) |
 
 ## Layering rules
 
@@ -122,7 +123,7 @@ Workflow for every schema change:
 - Lists return `Page[T]` (`{items, total, page, page_size}`) with `Annotated[PageParams, Depends()]` (page ≥1, page_size ≤100) and a stable order (`created_at desc, id`).
 - **Never let a client aggregate paged data itself** (counting `items` from a large `page_size` fetch is wrong past one page). Add a server-side stats/count endpoint that runs the same `scope_*` query grouped/counted in SQL — see `GET /applications/stats`.
 - Rules that need the stored row (e.g. PATCH merged-state checks) raise `Unprocessable(msg, field=...)`, which returns FastAPI's 422 list shape.
-- Enums, units and regions live in `core/instrument_types.py` and `core/regions.py`; application/document types in `core/application_types.py`. The frontend gets them from `GET /instruments/meta` and `GET /applications/meta`.
+- Enums, units and regions live in `core/instrument_types.py` and `core/regions.py`; application/document types in `core/application_types.py`; verification mode (spec 14) in its own sibling module `core/verification_types.py` — a routing concept computed from an instrument property but stored on the Application, not a fit for either existing file. The frontend gets them from `GET /instruments/meta` and `GET /applications/meta`.
 - **Row locks re-read:** every `with_for_update()` re-check uses `.execution_options(populate_existing=True)`. Otherwise the identity map returns the stale pre-lock copy.
 - **Audit-writing GETs commit in the service** (e.g. `GET /documents/{id}/url` writes `DOCUMENT_URL_ISSUED`).
 
@@ -141,10 +142,25 @@ Tables: `users`, `organizations`, `refresh_tokens`, `instruments`, `applications
   - Delete is blocked by `ON DELETE RESTRICT` once **any** application exists (→ 409).
   - **Locking:** `core/instrument_lock.py: locked_fields(active_status)` is the single source of truth, used by both the PATCH check and `InstrumentOut.locked_fields` (so the frontend disables exactly what the backend enforces — never re-derive the rule client-side). While a non-terminal application exists (DRAFT included), identity fields (manufacturer, model, serial_number, capacity, capacity_unit, accuracy_class, state_code, district_code) → 409. Once the application reaches SCHEDULED, INSPECTION or APPROVED, address/latitude/longitude lock too (409, a distinct message) — they stay editable through DRAFT/SUBMITTED/DOCUMENT_REVIEW. The lock lifts entirely at REJECTED or CERTIFICATE_ISSUED.
   - `InstrumentOut.active_application` (one LEFT JOIN); reported as `null` to officials while it's a DRAFT.
+  - `transportable` (spec `docs/specs/14-transportability.md`, migration `0009`): "Can the instrument be
+    transported?" Boolean, NOT NULL, `server_default(true())` (same pattern as `User.is_active`).
+    Defaults `true` on `InstrumentCreate` when omitted. Drives `Application.verification_mode`
+    (below) and joins `IDENTITY_LOCKED` — same reasoning as `state_code`/`district_code`: it's
+    snapshotted onto the Application at creation, so it locks for the same duration to keep the
+    instrument's live value from drifting out of sync with an in-progress application's frozen
+    snapshot.
 - `applications` (spec `docs/specs/03-applications.md`):
   - `application_number` = `APP-{UTC year}-{nextval('application_number_seq'):06d}`, display only.
   - One active (non-terminal) application per instrument: partial unique index `ux_applications_active_instrument`.
   - `state_code`/`district_code` are a snapshot of the instrument's location (locked while active).
+  - `verification_mode` (spec `docs/specs/14-transportability.md`, migration `0009`): a snapshot of
+    `instrument.transportable` taken at creation (`verification_mode_for()`,
+    `app/core/verification_types.py`) — `transportable=True → OFFICE_TEST_CENTRE`,
+    `False → ON_SITE`. Nullable enum column: frozen once set, never re-derived, and applications
+    created before `0009` have no snapshot to backfill (the point of a snapshot is that it can't
+    be reconstructed after the fact). Served as the raw enum on `ApplicationDetail` (matching how
+    `status`/`application_type` are served); display labels live only in
+    `GET /applications/meta`'s `verification_modes`, never hardcoded client-side.
   - `application_status_history` is append-only and feeds the timeline (businesses can't read `audit_logs`).
   - **Officials never see DRAFT applications or their documents** (`scope_applications`).
   - `scheduled_date` on `ApplicationOut`/`ApplicationDetail.inspection` comes from a LEFT JOIN/`contains_eager` on `inspections`, never a per-row query.
@@ -208,6 +224,22 @@ DRAFT → SUBMITTED → DOCUMENT_REVIEW → SCHEDULED → INSPECTION
   `document_review_checklist` (the template) follow the existing checklist-template meta pattern
   (`GET /inspections/meta`'s `checklist_templates`) — the frontend never hardcodes the list.
 - Audit action: `DOCUMENT_REVIEW_STARTED` (`details.checklist_item_count`, `details.reset`).
+
+### Transportability and verification mode (step 14, spec `docs/specs/14-transportability.md`)
+- `instruments.transportable` ("Can the instrument be transported?") defaults `true` on
+  `InstrumentCreate` when omitted and joins `IDENTITY_LOCKED` (locked while any non-terminal
+  application exists) — same reasoning as `state_code`/`district_code`: it's snapshotted onto the
+  Application at creation, so it locks for the same duration.
+- `applications.verification_mode` is set once, in `services/applications.py: create()`, via
+  `verification_types.verification_mode_for(instrument.transportable)`:
+  `transportable=True → OFFICE_TEST_CENTRE`, `False → ON_SITE`. Never re-derived afterward — a
+  later `PATCH /instruments/{id}` changing `transportable` (only reachable once the instrument
+  unlocks) never touches any existing application's `verification_mode`.
+- `GET /applications/meta`'s `verification_modes` (`[{value, label}, ...]`) is the only place the
+  display labels are served — `ApplicationDetail.verification_mode` itself is the raw enum,
+  matching `status`/`application_type`'s own convention.
+- No new endpoint: `transportable` rides the existing `POST/PATCH /instruments` and
+  `InstrumentOut`; `verification_mode` rides the existing `ApplicationDetail`/`ApplicationOut`.
 
 Certificate status: `VALID` · `EXPIRED` · `REVOKED`
 
@@ -302,7 +334,7 @@ POST  /api/jobs/expiry-check     # requires X-Cron-Secret header, no rate limit 
 GET   /api/admin/certificates/stats            # ADMIN_ROLES; {valid, expiring_soon, expired, revoked}
 GET   /api/admin/certificates/expiring-soon    # ADMIN_ROLES; Page[CertificateOut], valid_until asc
 GET   /api/public/verify/{certificate_number}                     # no auth
-GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}, document_review_checklist (step 11)
+GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}, document_review_checklist (step 11), verification_modes (step 14)
 CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
 GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 9 statuses zero-filled (step 11 adds DOCUMENTS_DEFICIENT)
 GET   /api/applications?sort=      # created_desc (default) | scheduled_asc

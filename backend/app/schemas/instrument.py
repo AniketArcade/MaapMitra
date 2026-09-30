@@ -40,6 +40,9 @@ class InstrumentCreate(StrictModel):
     capacity: Capacity
     capacity_unit: CapacityUnit
     accuracy_class: AccuracyClass | None = None
+    # Spec 14: "Can the instrument be transported?" Defaults true (office/test-centre) when the
+    # caller omits it, matching the DB's own server_default.
+    transportable: bool = True
     address: Text500
     state_code: StateCode | None = None  # default: the caller's organization
     district_code: DistrictCode | None = None
@@ -56,6 +59,7 @@ class InstrumentUpdate(StrictModel):
     capacity: Capacity | None = None
     capacity_unit: CapacityUnit | None = None
     accuracy_class: AccuracyClass | None = None
+    transportable: bool | None = None
     address: Text500 | None = None
     state_code: StateCode | None = None
     district_code: DistrictCode | None = None
@@ -88,6 +92,7 @@ class InstrumentOut(BaseModel):
     capacity: float
     capacity_unit: CapacityUnit
     accuracy_class: AccuracyClass | None
+    transportable: bool
     address: str
     state_code: str
     district_code: str
@@ -123,6 +128,7 @@ class InstrumentOut(BaseModel):
             capacity=float(i.capacity),
             capacity_unit=i.capacity_unit,
             accuracy_class=i.accuracy_class,
+            transportable=i.transportable,
             address=i.address,
             state_code=i.state_code,
             district_code=i.district_code,
