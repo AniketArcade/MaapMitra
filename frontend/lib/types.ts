@@ -129,14 +129,16 @@ export type InstrumentCategory = {
   field_schema: CategoryFieldSchema[];
 };
 
+export type RegionMeta = {
+  state_code: string;
+  state_name: string;
+  districts: { code: string; name: string }[];
+};
+
 export type InstrumentMeta = {
   types: { value: string; label: string; units: string[] }[];
   accuracy_classes: string[];
-  regions: {
-    state_code: string;
-    state_name: string;
-    districts: { code: string; name: string }[];
-  }[];
+  regions: RegionMeta[];
   // Spec 16: the 33 instrument categories. Never hard-code their names/fields — load them from
   // here (getInstrumentMeta()) same as types/regions/accuracy_classes above.
   categories: InstrumentCategory[];

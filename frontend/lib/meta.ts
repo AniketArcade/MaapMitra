@@ -1,5 +1,5 @@
 import { api } from "@/lib/api";
-import type { ApplicationMeta, InspectionMeta, InstrumentCategory, InstrumentMeta } from "@/lib/types";
+import type { ApplicationMeta, InspectionMeta, InstrumentCategory, InstrumentMeta, RegionMeta } from "@/lib/types";
 
 // Loaded once per page session; the backend is the single source of truth.
 let metaPromise: Promise<InstrumentMeta> | null = null;
@@ -51,4 +51,16 @@ export function getInspectionMeta(): Promise<InspectionMeta> {
     throw err;
   });
   return inspectionMetaPromise;
+}
+
+// Public (no auth): GET /public/regions — same REGIONS data as InstrumentMeta.regions, but
+// reachable from the pre-login register page.
+let publicRegionsPromise: Promise<RegionMeta[]> | null = null;
+
+export function getPublicRegions(): Promise<RegionMeta[]> {
+  publicRegionsPromise ??= api<RegionMeta[]>("/public/regions").catch((err: unknown) => {
+    publicRegionsPromise = null;
+    throw err;
+  });
+  return publicRegionsPromise;
 }

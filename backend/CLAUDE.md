@@ -564,6 +564,7 @@ POST  /api/jobs/expiry-check     # requires X-Cron-Secret header, no rate limit 
 GET   /api/admin/certificates/stats            # ADMIN_ROLES; {valid, expiring_soon, expired, revoked, superseded}
 GET   /api/admin/certificates/expiring-soon    # ADMIN_ROLES; Page[CertificateOut], valid_until asc
 GET   /api/public/verify/{certificate_number}                     # no auth
+GET   /api/public/regions          # no auth; state/district list for the pre-login register form (same REGIONS as instruments/meta)
 GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}, document_review_checklist (step 11), verification_modes (step 14), payment_statuses (step 12)
 CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
 GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 9 statuses zero-filled (step 11 adds DOCUMENTS_DEFICIENT)

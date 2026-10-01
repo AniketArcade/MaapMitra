@@ -146,3 +146,14 @@ def test_public_verify_rate_limit(client: TestClient, make_user, make_applicatio
         assert res.status_code == 200
     res = client.get(f"/api/public/verify/{cert['certificate_number']}")
     assert res.status_code == 429
+
+
+def test_public_regions_no_auth(client: TestClient) -> None:
+    res = client.get("/api/public/regions")
+    assert res.status_code == 200
+    regions = res.json()
+    state_codes = {r["state_code"] for r in regions}
+    assert "JH" in state_codes
+    assert len(regions) >= 36  # all states + UTs
+    jh = next(r for r in regions if r["state_code"] == "JH")
+    assert {d["code"] for d in jh["districts"]} == {"DHN", "RNC", "BKR"}

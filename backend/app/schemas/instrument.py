@@ -212,6 +212,19 @@ class RegionMeta(BaseModel):
     state_name: str
     districts: list[DistrictMeta]
 
+    @classmethod
+    def build_all(cls) -> list[Self]:
+        """Shared by `GET /instruments/meta` (below) and the public `GET /public/regions` (no
+        auth) — the same REGIONS source, so the two never drift apart."""
+        return [
+            cls(
+                state_code=code,
+                state_name=state["name"],
+                districts=[DistrictMeta(code=c, name=n) for c, n in state["districts"].items()],
+            )
+            for code, state in REGIONS.items()
+        ]
+
 
 class InstrumentMeta(BaseModel):
     types: list[TypeMeta]
@@ -233,12 +246,5 @@ class InstrumentMeta(BaseModel):
             ],
             accuracy_classes=list(AccuracyClass),
             categories=[InstrumentCategoryOut.from_model(c) for c in categories],
-            regions=[
-                RegionMeta(
-                    state_code=code,
-                    state_name=state["name"],
-                    districts=[DistrictMeta(code=c, name=n) for c, n in state["districts"].items()],
-                )
-                for code, state in REGIONS.items()
-            ],
+            regions=RegionMeta.build_all(),
         )
