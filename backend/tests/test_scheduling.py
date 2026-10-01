@@ -142,8 +142,12 @@ def test_schedule_role_and_scope(client: TestClient, make_user, make_application
     app = make_application(owner, status="DOCUMENT_REVIEW", officer=dhn_officer)
     d = clock.today().isoformat()
     assert _schedule(client, owner, app.id, d).status_code == 403
-    for role in (Role.DISTRICT_ADMIN, Role.STATE_ADMIN, Role.SUPER_ADMIN, Role.GATC):
+    for role in (Role.DISTRICT_ADMIN, Role.STATE_ADMIN, Role.SUPER_ADMIN):
         assert _schedule(client, make_user(role), app.id, d).status_code == 403
+    # Spec 20: GATC is now a Reader too, but this fresh GATC user has no Inspection assigned to
+    # them -> 404 (out of scope), unlike the jurisdiction-wide admin roles above (in scope, wrong
+    # role -> 403).
+    assert _schedule(client, make_user(Role.GATC), app.id, d).status_code == 404
     rnc_officer = make_user(Role.LM_OFFICER, district_code="RNC")
     assert _schedule(client, rnc_officer, app.id, d).status_code == 404
 

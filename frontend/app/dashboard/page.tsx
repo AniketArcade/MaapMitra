@@ -396,12 +396,55 @@ function JurisdictionLink() {
   );
 }
 
+// Spec 20 §6.1: replaces the old static "Assigned verifications will appear here" stub. Reuses
+// GET /applications/stats (now GATC-admitted) and the same ApplicationsSummary/
+// NeedsAttentionSection/RecentSection components OfficerDashboard already uses -- only two
+// needs-attention buckets (not three): GATC is never in SUBMITTED/DOCUMENT_REVIEW, structurally
+// not its job (spec 20 §2). No instrument count section either (GATC has no instrument access).
+function GatcDashboard({ user }: { user: User }) {
+  const stats = useAsync(() => getApplicationStats());
+  const scheduled = useAsync(() =>
+    api<Page<Application>>("/applications?status=SCHEDULED&sort=scheduled_asc&page_size=5"),
+  );
+  const inspecting = useAsync(() =>
+    api<Page<Application>>("/applications?status=INSPECTION&sort=scheduled_asc&page_size=5"),
+  );
+  const recent = useAsync(() => api<Page<Application>>("/applications?page_size=5"));
+  const meta = useApplicationMeta();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>GATC dashboard</CardTitle>
+        <CardDescription>{user.organization_name}</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-6">
+        <ApplicationsSummary
+          stats={stats}
+          meta={meta}
+          empty={{ message: "No applications assigned yet" }}
+        />
+        <NeedsAttentionSection
+          rules={[
+            { status: "SCHEDULED", hint: "Start verification", data: scheduled },
+            { status: "INSPECTION", hint: "Continue inspection", data: inspecting },
+          ]}
+        />
+        <RecentSection recent={recent} meta={meta} />
+      </CardContent>
+    </Card>
+  );
+}
+
 function RoleCard({ user }: { user: User }) {
   if (user.role === "BUSINESS") {
     return <BusinessDashboard user={user} />;
   }
   if (user.role === "LM_OFFICER") {
     return <OfficerDashboard user={user} />;
+  }
+  if (user.role === "GATC") {
+    return <GatcDashboard user={user} />;
   }
   if (ADMIN_ROLES.includes(user.role)) {
     return (
@@ -426,17 +469,9 @@ function RoleCard({ user }: { user: User }) {
       </Card>
     );
   }
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>GATC dashboard</CardTitle>
-        <CardDescription>{user.organization_name}</CardDescription>
-      </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
-        Assigned verifications will appear here.
-      </CardContent>
-    </Card>
-  );
+  // Unreachable: SUPER_ADMIN/STATE_ADMIN/DISTRICT_ADMIN/LM_OFFICER/GATC/BUSINESS are all handled
+  // explicitly above. Kept as a safety net, not a real fallback.
+  return null;
 }
 
 export default function DashboardPage() {

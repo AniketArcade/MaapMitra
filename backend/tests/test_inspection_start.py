@@ -112,7 +112,10 @@ def test_start_role_rejected(client: TestClient, make_user, make_application, ro
     app = make_application(owner, status="SCHEDULED", officer=officer)
     # BUSINESS must be the owning org to reach the role check at all (else scope hides it: 404).
     caller = owner if role == Role.BUSINESS else make_user(role)
-    assert _start(client, caller, app.id).status_code == 403
+    # Spec 20: a fresh GATC caller has no Inspection assigned to them -> 404 (out of scope),
+    # unlike every other role here, which is in scope but simply the wrong role -> 403.
+    expected = 404 if role == Role.GATC else 403
+    assert _start(client, caller, app.id).status_code == expected
 
 
 def test_start_wrong_status_conflict(client: TestClient, make_user, make_application) -> None:  # noqa: ANN001

@@ -567,12 +567,12 @@ GET   /api/admin/certificates/expiring-soon    # ADMIN_ROLES; Page[CertificateOu
 GET   /api/public/verify/{certificate_number}                     # no auth
 GET   /api/public/regions          # no auth; state/district list for the pre-login register form (same REGIONS as instruments/meta)
 GET   /api/applications/meta       # types, statuses (lifecycle order), document types + requirements, upload limits, scheduling {timezone, max_days_ahead}, document_review_checklist (step 11), verification_modes (step 14), payment_statuses (step 12)
-CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction)
+CRUD  /api/applications            # write: BUSINESS, DRAFT only; read: + officials (non-DRAFT, jurisdiction) + GATC (own assignment(s) only, step 20)
 GET   /api/applications/stats      # {total, by_status}: same scope_applications as the list, all 9 statuses zero-filled (step 11 adds DOCUMENTS_DEFICIENT)
 GET   /api/applications?sort=      # created_desc (default) | scheduled_asc
 PATCH /api/applications/{id}/inspection   # LM_OFFICER only; reschedule while SCHEDULED
 PATCH /api/applications/{id}/review-checklist   # LM_OFFICER only, DOCUMENT_REVIEW only; toggle document-review checklist items (step 11)
-DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSPECTION evidence (step 6)
+DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/GATC/INSPECTION evidence (step 6, GATC added step 20)
 GET   /api/gatc/eligible          # LM_OFFICER only; ?category_id=<id>, jurisdiction-scoped GATC orgs (step 15)
 GET   /api/gatc/{organization_id}/users   # LM_OFFICER only; active GATC-role users of one org (step 15)
 GET   /api/users                  # SUPER_ADMIN + STATE_ADMIN (own state, step 18); official accounts (role in OFFICIAL_ROLES), filters role/state_code/district_code/is_active/q; ?role=LM_OFFICER populates pending_cases/completed_cases per officer (step 17)
@@ -583,7 +583,7 @@ GET   /api/organizations?type=GATC   # SUPER_ADMIN + STATE_ADMIN (own state, ste
 GET   /api/applications?state_code=&district_code=   # additive filters on the existing list, any role (no-op for jurisdiction-locked callers) (step 17)
 GET   /admin/state-overview       # ADMIN_ROLES; one row per REGIONS state/UT, zero-filled, never paginated (step 17)
 GET   /admin/district-overview    # ADMIN_ROLES; one row per district of one state, zero-filled, never paginated; state_code forced for STATE_ADMIN/DISTRICT_ADMIN, required for SUPER_ADMIN (step 18)
-GET   /api/certificates           # same Reader/scope_certificates as every other certificate endpoint; ?status= filter; first certificate list endpoint (step 17)
+GET   /api/certificates           # same Reader/scope_certificates as every other certificate endpoint (GATC added step 20); ?status= filter; first certificate list endpoint (step 17)
 GET   /admin/certificates/{stats,expiring-soon}   # ADMIN_ROLES + LM_OFFICER (step 19); officer sees own district only, same scope_certificates chain
 ```
 
@@ -830,6 +830,56 @@ change — this step widened one router dependency.
   self-only scoping concept no endpoint has today), `instrument_type`/`application_type` filters
   on `GET /applications`, notifications, and generic report export — see the spec's §2/§9 for the
   full reasoning on each.
+
+### GATC frontend (step 20, spec `docs/specs/20-gatc-frontend.md`)
+
+Finishes a rollout spec 15 deliberately left half-open: `scope_applications()`'s `GATC` branch
+(the narrowest of any role — exactly the application(s) a specific `GATC` user has been assigned
+to inspect) already resolved correctly everywhere it chained to, but four **router-level** role
+gates stayed closed, so a `GATC` user could act on the one application a `LM_OFFICER` routed them
+to but couldn't browse their own work, view their own certificates, view applicant documents, or
+upload their own evidence photos. The frontend reflected this literally — `app/dashboard/page.tsx`
+'s `RoleCard` fallback branch (originally a generic catch-all, in practice only ever hit by
+`GATC`) rendered a static stub, "Assigned verifications will appear here," no data fetch at all.
+
+- **Four pure role-set widenings, zero service-layer changes** — every one of them already sat in
+  front of a function that calls `scope_applications()` or chains through it:
+  - `routers/applications.py: READER_ROLES` gains `Role.GATC`. Side effect: this made the
+    file's own `_reader_or_assigned_gatc()`/`ReaderOrAssignedGatc` dependency (spec 15) fully
+    redundant — its `GATC`-specific branch became unreachable dead code with a now-false
+    docstring claim ("an out-of-scope GATC caller must still see exactly 403, never 404"). Removed
+    entirely; `GET/PATCH /{application_id}` now just use the plain `Reader` dependency.
+  - `routers/certificates.py: Reader` gains `Role.GATC` — also fixes a latent dead link where a
+    `GATC`-tested, since-`CERTIFICATE_ISSUED` application's embedded "View certificate" link
+    (`ApplicationDetail.certificate`) used to 403 a `GATC` viewer.
+  - `routers/documents.py: Reader` and `Uploader` both gain `Role.GATC`. `services/documents.py:
+    _check_upload_allowed()`'s `INSPECTION_EVIDENCE` branch was **already identity-based**
+    (`inspection.assigned_officer_id != user.id` → 403), not role-based — admitting `GATC` to
+    `Uploader` only unblocks evidence-photo upload/delete during the user's own active,
+    not-yet-submitted inspection. The `else` branch (ordinary business documents) still hard-
+    rejects any non-`BUSINESS` actor unchanged.
+- **Not widened**: `routers/instruments.py` (`scope_instruments()` has no `GATC` branch at all —
+  a real new join, not a free reuse, and not essential since the one instrument a `GATC` user is
+  working on is already fully embedded in `ApplicationDetail.instrument`), and `routers/admin.py`
+  's `AdminOrOfficer` (spec 19) stays `LM_OFFICER`-only — a `GATC` user's lifetime certificate
+  count is small and already fully visible, with real status, on the certificate list this step
+  opens.
+- Widening `READER_ROLES` had a real, non-obvious consequence caught only by a full-suite
+  `pytest` run, not anticipated by the original implementation plan: several pre-existing tests
+  asserted a flat `403` for an unrelated `GATC` caller on endpoints this step widened (status
+  transitions, scheduling, inspection-start) — once `GATC` is a genuine `Reader`, an *unassigned*
+  `GATC` user now correctly gets `200`+empty-list or `404` (out of scope), never `403`, matching
+  every other role's existing "out of scope is 404" convention. Every one of those tests was
+  fixed to assert the new, correct behavior (see the spec's §11 for the full list).
+- Brief sections dropped as **structurally inapplicable**, not merely unbuilt: `GATC`'s own
+  `ALLOWED_TRANSITIONS` membership (`SCHEDULED → INSPECTION`, `INSPECTION → APPROVED`/`REJECTED`
+  only) proves scrutiny, querying, and scheduling are — and will remain — the routing
+  `LM_OFFICER`'s job alone, never `GATC`'s. A Staff Management / Principal Officer hierarchy was
+  dropped as inapplicable too — `Role.GATC` is one flat role, no such data model exists anywhere.
+  Everything else maps onto specs 06/07/08/15 unchanged. See the spec's §2/§9 for the full
+  reasoning on each, and §7 for the three real Decisions deferred (an instrument list for `GATC`,
+  expiry monitoring for `GATC`, and surfacing `gatc_eligible_category_ids` on the `GATC` user's
+  own profile).
 
 ## Auth and RBAC (spec: `docs/specs/01-login-rbac.md`)
 

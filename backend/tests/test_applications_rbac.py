@@ -27,10 +27,12 @@ def test_owner_only_endpoints(client: TestClient, make_user, make_application, r
     url = f"/api/applications/{draft.id}"
     assert client.patch(url, json={"business_notes": "x"}, headers=headers).status_code == 403
     assert client.delete(url, headers=headers).status_code == 403
-    # LM_OFFICER is now admitted at the router (it also uploads inspection evidence, spec 06),
-    # but scope_applications hides a DRAFT application from officials entirely -> 404, not 403.
-    # Every other non-BUSINESS role is still blocked at the router itself -> 403.
-    expected = 404 if role == Role.LM_OFFICER else 403
+    # LM_OFFICER and GATC are both admitted at the router (they upload inspection evidence,
+    # spec 06/20), but a DRAFT application has no Inspection row yet -- scope_applications hides
+    # it from LM_OFFICER entirely, and GATC's own EXISTS-based scope can never match either (no
+    # Inspection to match against) -> 404 for both, not 403. Every other non-BUSINESS role is
+    # still blocked at the router itself -> 403.
+    expected = 404 if role in (Role.LM_OFFICER, Role.GATC) else 403
     assert upload(client, make_user(role), draft.id).status_code == expected
     assert client.delete(f"/api/documents/{doc_id}", headers=headers).status_code == expected
 
@@ -44,7 +46,10 @@ def test_read_endpoints(client: TestClient, make_user, make_application, role: R
     meta_res = client.get("/api/applications/meta", headers=headers)
     assert meta_res.status_code == 200
     if role == Role.GATC:
-        assert (list_res.status_code, get_res.status_code) == (403, 403)
+        # Spec 20: GATC is now a Reader too, but scope_applications' GATC branch still narrows
+        # to nothing for an unassigned user -- 200/empty, 404 on the single-item get, never 403.
+        assert list_res.status_code == 200 and list_res.json()["total"] == 0
+        assert get_res.status_code == 404
     elif role == Role.BUSINESS:  # another org
         assert list_res.json()["total"] == 0 and get_res.status_code == 404
     else:
@@ -59,7 +64,9 @@ def test_document_url(client: TestClient, make_user, make_application, role: Rol
         "documents"
     ][0]["id"]
     res = client.get(f"/api/documents/{doc_id}/url", headers=auth_header(make_user(role)))
-    expected = {Role.GATC: 403, Role.BUSINESS: 404}.get(role, 200)
+    # Spec 20: GATC is now a Reader too; an unassigned GATC user's scope still excludes this
+    # application's documents entirely -> 404, same "out of scope" shape as a different BUSINESS.
+    expected = 404 if role in (Role.BUSINESS, Role.GATC) else 200
     assert res.status_code == expected
 
 

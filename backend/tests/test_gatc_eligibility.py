@@ -451,11 +451,14 @@ def test_assigned_gatc_can_start_perform_and_approve(
     assert sched.status_code == 200, sched.text
 
     other_gatc = make_user(Role.GATC, gatc_eligible_category_ids=[15])
+    # Spec 20: GATC is now a Reader at the router level (GET /applications, /applications/{id},
+    # PATCH .../status) -- an unrelated GATC user now gets 404 (out of scope), not 403, matching
+    # every other role's existing "out of scope is 404, never 403" convention.
     assert (
         client.get(f"/api/applications/{app.id}", headers=auth_header(other_gatc)).status_code
-        == 403
+        == 404
     )
-    assert _status(client, other_gatc, app.id, "INSPECTION").status_code == 403
+    assert _status(client, other_gatc, app.id, "INSPECTION").status_code == 404
 
     view = client.get(f"/api/applications/{app.id}", headers=auth_header(gatc))
     assert view.status_code == 200, view.text

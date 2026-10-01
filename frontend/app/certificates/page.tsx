@@ -28,11 +28,12 @@ type State =
   | { kind: "error"; message: string }
   | { kind: "ready"; data: Page<Certificate> };
 
-// Spec 19 §6.2: an LM_OFFICER-only certificate directory, mirroring
-// app/admin/certificates/page.tsx's CertificatesList structurally. GET /api/certificates already
-// admits LM_OFFICER (spec 17's Reader role set) and is already scoped to the officer's own
-// district via scope_certificates -> scope_applications — no new filter logic needed.
+// Spec 19 §6.2 (LM_OFFICER), extended spec 20 §6.5 (GATC): mirrors app/admin/certificates/
+// page.tsx's CertificatesList structurally. GET /api/certificates already admits both roles
+// (spec 17's Reader role set, widened spec 20) and is already scoped correctly via
+// scope_certificates -> scope_applications — no new filter logic needed for either role.
 function CertificatesList() {
+  const { user } = useAuth();
   const [status, setStatus] = useState(ALL);
   const [page, setPage] = useState(1);
   const [state, setState] = useState<State>({ kind: "loading" });
@@ -68,7 +69,9 @@ function CertificatesList() {
     <div className="grid gap-6">
       <div>
         <h1 className="text-2xl font-semibold">Certificates</h1>
-        <p className="text-sm text-muted-foreground">Every certificate in your district.</p>
+        <p className="text-sm text-muted-foreground">
+          {user?.role === "GATC" ? "Every certificate you've tested." : "Every certificate in your district."}
+        </p>
       </div>
 
       <div className="max-w-xs">
@@ -159,9 +162,9 @@ function CertificatesList() {
   );
 }
 
-export default function OfficerCertificatesPage() {
+export default function CertificatesPage() {
   const { user } = useAuth();
-  if (!user || user.role !== "LM_OFFICER") {
+  if (!user || !["LM_OFFICER", "GATC"].includes(user.role)) {
     return <StateMessage title={NO_ACCESS} />;
   }
   return <CertificatesList />;

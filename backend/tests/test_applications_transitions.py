@@ -100,7 +100,10 @@ def test_evaluation_order(client: TestClient, make_user, make_application) -> No
         _status(client, make_user(Role.SUPER_ADMIN), submitted.id, "DOCUMENT_REVIEW").status_code
         == 403
     )
-    assert _status(client, make_user(Role.GATC), submitted.id, "DOCUMENT_REVIEW").status_code == 403
+    # Spec 20: GATC is now a Reader too, but this fresh GATC user has no Inspection assigned to
+    # them at all, so scope_applications' GATC branch can never match -> 404 (out of scope),
+    # unlike DISTRICT_ADMIN/SUPER_ADMIN above, who are in scope but simply the wrong role.
+    assert _status(client, make_user(Role.GATC), submitted.id, "DOCUMENT_REVIEW").status_code == 404
     # Real edge, right role, enabled, but an edge-specific rule blocks it (step 7: checklist not
     # yet submitted)
     inspecting = make_application(owner, status="INSPECTION", officer=officer)
@@ -325,7 +328,9 @@ def test_approve_reject_role_and_scope(client: TestClient, make_user, make_appli
     assert _status(client, owner, app.id, "APPROVED").status_code == 403
     assert _status(client, make_user(Role.DISTRICT_ADMIN), app.id, "APPROVED").status_code == 403
     assert _status(client, make_user(Role.SUPER_ADMIN), app.id, "APPROVED").status_code == 403
-    assert _status(client, make_user(Role.GATC), app.id, "APPROVED").status_code == 403
+    # Spec 20: this fresh GATC user has no Inspection assigned to them -> 404 (out of scope),
+    # not "in scope, wrong role" like the two roles above.
+    assert _status(client, make_user(Role.GATC), app.id, "APPROVED").status_code == 404
 
     outsider = make_user(Role.LM_OFFICER, district_code="RNC")
     assert _status(client, outsider, app.id, "APPROVED").status_code == 404

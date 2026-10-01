@@ -165,10 +165,10 @@ def test_list_gatc_directory_super_admin_and_state_admin(
 
 @pytest.mark.parametrize("role", ALL_ROLES)
 def test_list_certificates_rbac(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
-    # Same Reader role set as every other certificate endpoint (BUSINESS/LM_OFFICER/*_ADMIN) —
-    # only GATC is excluded (never had certificate access anywhere in this codebase).
+    # Spec 20: GATC admitted too — scope_certificates()'s existing GATC branch already resolves
+    # correctly (empty for an unassigned GATC user, never a 403); every role now gets 200.
     res = client.get("/api/certificates", headers=auth_header(make_user(role)))
-    assert res.status_code == (403 if role == Role.GATC else 200)
+    assert res.status_code == 200
 
 
 # ---------------------------------------------------------------------------

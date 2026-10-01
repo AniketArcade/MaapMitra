@@ -92,8 +92,10 @@ ALL_ROLES = list(Role)
 
 @pytest.mark.parametrize("role", ALL_ROLES)
 def test_rbac(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+    # Spec 20: GATC is now a Reader too -- scope_applications' GATC branch already zero-fills
+    # correctly for an unassigned user, so every role gets 200.
     res = client.get("/api/applications/stats", headers=auth_header(make_user(role)))
-    assert res.status_code == (403 if role == Role.GATC else 200)
+    assert res.status_code == 200
 
 
 def test_anonymous(client: TestClient) -> None:

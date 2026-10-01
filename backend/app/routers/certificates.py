@@ -14,11 +14,21 @@ from app.services.certificates import SIGNED_URL_SECONDS
 
 router = APIRouter(prefix="/certificates", tags=["certificates"])
 
+# Spec 20: GATC admitted too — scope_certificates() already chains through scope_applications()'s
+# existing GATC branch (spec 15), so this was a pure router-gate widening with zero service
+# change. Also closes a latent dead link: a GATC-tested application that reaches
+# CERTIFICATE_ISSUED already shows a "View certificate" link (ApplicationDetail.certificate) that
+# previously 403'd a GATC viewer.
 Reader = Annotated[
     User,
     Depends(
         require_roles(
-            Role.BUSINESS, Role.LM_OFFICER, Role.DISTRICT_ADMIN, Role.STATE_ADMIN, Role.SUPER_ADMIN
+            Role.BUSINESS,
+            Role.LM_OFFICER,
+            Role.DISTRICT_ADMIN,
+            Role.STATE_ADMIN,
+            Role.SUPER_ADMIN,
+            Role.GATC,
         )
     ),
 ]

@@ -14,19 +14,29 @@ from app.services.documents import SIGNED_URL_SECONDS
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+# Spec 20: GATC admitted to both — scope_documents() already chains through
+# scope_applications()'s existing GATC branch (spec 15), zero service change for Reader.
 Reader = Annotated[
     User,
     Depends(
         require_roles(
-            Role.BUSINESS, Role.LM_OFFICER, Role.DISTRICT_ADMIN, Role.STATE_ADMIN, Role.SUPER_ADMIN
+            Role.BUSINESS,
+            Role.LM_OFFICER,
+            Role.DISTRICT_ADMIN,
+            Role.STATE_ADMIN,
+            Role.SUPER_ADMIN,
+            Role.GATC,
         )
     ),
 ]
 Owner = Annotated[User, Depends(require_roles(Role.BUSINESS))]
-# BUSINESS uploads/deletes its own documents (DRAFT only); LM_OFFICER uploads/deletes inspection
-# evidence photos (INSPECTION only, assigned officer only) — the service enforces which actor
-# may touch which document_type (spec 06 A1); this dependency only admits both roles.
-Uploader = Annotated[User, Depends(require_roles(Role.BUSINESS, Role.LM_OFFICER))]
+# BUSINESS uploads/deletes its own documents (DRAFT only); LM_OFFICER/GATC upload/delete
+# inspection evidence photos (INSPECTION only, assigned officer only) — the service enforces
+# which actor may touch which document_type (spec 06 A1; GATC added spec 20): services/
+# documents.py: _check_upload_allowed()'s INSPECTION_EVIDENCE branch is already identity-based
+# (assigned_officer_id == user.id), not role-based, so admitting GATC here needed zero service
+# change — its ordinary-document branch still hard-rejects any non-BUSINESS actor unchanged.
+Uploader = Annotated[User, Depends(require_roles(Role.BUSINESS, Role.LM_OFFICER, Role.GATC))]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

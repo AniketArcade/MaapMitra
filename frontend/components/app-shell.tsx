@@ -44,14 +44,24 @@ const NAV = [
 ];
 
 // Spec 19 §6.4: LM_OFFICER gets its own flat sidebar instead of sharing NAV with BUSINESS/GATC —
-// NAV itself is never edited here, since BUSINESS has no certificate list page and GATC is
-// excluded from certificate access entirely (both would hit a dead end on these two links).
+// NAV itself is never edited here, since BUSINESS has no certificate list page (and, before spec
+// 20, GATC had no certificate access at all either).
 const OFFICER_NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/instruments", label: "Instruments", icon: Gauge },
   { href: "/applications", label: "Applications", icon: FileText },
   { href: "/certificates", label: "Certificates", icon: Award },
   { href: "/certificates/expiring-soon", label: "Expiring soon", icon: Clock3 },
+  { href: "/profile", label: "Profile", icon: User },
+];
+
+// Spec 20 §6.6: GATC gets its own flat sidebar too, narrower than OFFICER_NAV — no
+// "Instruments" (scope_instruments has no GATC branch, D1) and no "Expiring soon" (D2, not
+// jurisdiction-scoped for this role; its own certificate list already shows real status per row).
+const GATC_NAV = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/applications", label: "Applications", icon: FileText },
+  { href: "/certificates", label: "Certificates", icon: Award },
   { href: "/profile", label: "Profile", icon: User },
 ];
 
@@ -112,9 +122,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         ? STATE_ADMIN_NAV
         : user.role === "LM_OFFICER"
           ? OFFICER_NAV
-          : ADMIN_ROLES.includes(user.role)
-            ? [...NAV, { href: "/admin", label: "Admin", icon: ShieldCheck }]
-            : NAV;
+          : user.role === "GATC"
+            ? GATC_NAV
+            : ADMIN_ROLES.includes(user.role)
+              ? [...NAV, { href: "/admin", label: "Admin", icon: ShieldCheck }]
+              : NAV;
 
   return (
     <SidebarProvider>

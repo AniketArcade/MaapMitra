@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core.application_types import ApplicationStatus
 from app.core.deps import DB, CurrentUser, get_client_ip, require_roles
-from app.core.errors import Forbidden
 from app.core.roles import Role
 from app.models.user import User
 from app.schemas.application import (
@@ -22,42 +21,28 @@ from app.schemas.application import (
 from app.schemas.common import Page, PageParams
 from app.services import applications as service
 from app.services import certificates as certificates_service
-from app.services import gatc as gatc_service
 from app.services import inspections as inspections_service
 from app.services import payments as payments_service
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
+# Spec 20: GATC admitted too — scope_applications()'s existing GATC branch (spec 15) already
+# resolves correctly (narrowest of any role: exactly the application(s) this person has been
+# assigned to inspect), so this was a pure router-gate widening with zero service change.
 READER_ROLES = frozenset(
-    {Role.BUSINESS, Role.LM_OFFICER, Role.DISTRICT_ADMIN, Role.STATE_ADMIN, Role.SUPER_ADMIN}
+    {
+        Role.BUSINESS,
+        Role.LM_OFFICER,
+        Role.DISTRICT_ADMIN,
+        Role.STATE_ADMIN,
+        Role.SUPER_ADMIN,
+        Role.GATC,
+    }
 )
 
 Reader = Annotated[User, Depends(require_roles(*READER_ROLES))]
 Owner = Annotated[User, Depends(require_roles(Role.BUSINESS))]
 Officer = Annotated[User, Depends(require_roles(Role.LM_OFFICER))]
-
-
-def _reader_or_assigned_gatc(application_id: uuid.UUID, user: CurrentUser, db: DB) -> User:
-    """GET /applications/{id} and PATCH /applications/{id}/status (spec 15): GATC has no general
-    read access to applications — unchanged for every pre-existing RBAC test, which pins a flat
-    403 for an unrelated GATC caller. The one exception is the specific application a GATC user
-    has actually been scheduled to inspect. Checked directly here, against the path's own
-    application_id, rather than deferring to scope_applications (which only runs once this
-    dependency has already let the caller through): an out-of-scope/unassigned GATC caller must
-    still see exactly 403, never 404 — 404 is scope_applications' answer for "not visible to you",
-    which is the right answer once past this gate, but the wrong one at the router boundary for a
-    role this endpoint doesn't generally admit at all.
-    """
-    if user.role in READER_ROLES:
-        return user
-    if user.role == Role.GATC and gatc_service.is_assigned_gatc_for_application(
-        db, application_id=application_id, user_id=user.id
-    ):
-        return user
-    raise Forbidden("Insufficient permissions")
-
-
-ReaderOrAssignedGatc = Annotated[User, Depends(_reader_or_assigned_gatc)]
 
 
 def _detail(db: DB, user: User, application_id: uuid.UUID) -> ApplicationDetail:
@@ -127,9 +112,7 @@ def list_applications(
 
 
 @router.get("/{application_id}")
-def get_application(
-    application_id: uuid.UUID, user: ReaderOrAssignedGatc, db: DB
-) -> ApplicationDetail:
+def get_application(application_id: uuid.UUID, user: Reader, db: DB) -> ApplicationDetail:
     return _detail(db, user, application_id)
 
 
@@ -151,7 +134,7 @@ def change_status(
     request: Request,
     application_id: uuid.UUID,
     body: StatusChange,
-    user: ReaderOrAssignedGatc,
+    user: Reader,
     db: DB,
 ) -> ApplicationDetail:
     service.transition(db, user, application_id, body, ip=get_client_ip(request))
