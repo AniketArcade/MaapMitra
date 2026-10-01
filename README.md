@@ -79,6 +79,24 @@ production use.
 | `owner@abctraders.demo` | BUSINESS | ABC Traders (JH / DHN) — the demo story's main actor |
 | `owner@othertraders.demo` | BUSINESS | Other Traders (JH / DHN) — org-isolation demo only |
 
+### Live accounts (deployed Supabase backend)
+
+Separate from the `database/seed/` accounts above — these exist directly on the live Supabase
+database behind the deployed app, for judging/demo access across multiple states. All share one
+password — a **hackathon shortcut**, not a real secret; delete or rotate before any production use.
+
+**Shared password:** `12341234`
+
+| Email | Role | Scope |
+|---|---|---|
+| `maapmitra@gmail.com` | SUPER_ADMIN | — |
+| `state.jh@gmail.com` | STATE_ADMIN | Jharkhand (JH) |
+| `state.ka@gmail.com` | STATE_ADMIN | Karnataka (KA) |
+| `state.mh@gmail.com` | STATE_ADMIN | Maharashtra (MH) |
+| `state.up@gmail.com` | STATE_ADMIN | Uttar Pradesh (UP) |
+| `state.tn@gmail.com` | STATE_ADMIN | Tamil Nadu (TN) |
+| `state.dl@gmail.com` | STATE_ADMIN | Delhi (DL) |
+
 ## Demo story
 
 ABC Traders registers a weighing scale (serial `XYZ12345`, 500 kg, Dhanbad) → applies with
