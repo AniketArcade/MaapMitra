@@ -17,6 +17,9 @@ Register instrument → Apply → Document review → Schedule → Field inspect
 | Database | Supabase Postgres | Supabase |
 | Files | Supabase Storage (private buckets, signed URLs) | Supabase |
 | Auth | Own JWT + RBAC in FastAPI | — |
+| Email | Resend | — |
+| Certificate PDF | ReportLab | — |
+| QR codes | segno | — |
 
 Frontend → FastAPI → Supabase only. The frontend never touches the database directly. See root
 [`CLAUDE.md`](./CLAUDE.md) for the full architecture rules, and [`backend/CLAUDE.md`](./backend/CLAUDE.md) /
@@ -62,22 +65,11 @@ Notes on branches not obvious from the diagram:
 
 Org isolation is absolute: a business never sees another business's data.
 
-## Demo login
-
-Seeded by `database/seed/` ([full details](./database/seed/README.md)). All demo accounts share
-one password — a **hackathon shortcut**, not a real secret; delete these accounts before any
-production use.
-
-**Shared demo password:** `LmDemo@2026`
-
-| Email | Role | Scope |
-|---|---|---|
-| `admin@lm.demo` | SUPER_ADMIN | — |
-| `state.jh@lm.demo` | STATE_ADMIN | JH |
-| `district.dhn@lm.demo` | DISTRICT_ADMIN | JH / DHN |
-| `officer.dhn@lm.demo` | LM_OFFICER | JH / DHN |
-| `owner@abctraders.demo` | BUSINESS | ABC Traders (JH / DHN) — the demo story's main actor |
-| `owner@othertraders.demo` | BUSINESS | Other Traders (JH / DHN) — org-isolation demo only |
+**Admin console** (`SUPER_ADMIN`/`STATE_ADMIN`/`DISTRICT_ADMIN`, specs 17–21): user
+management, audit log viewer, LMO directory (live pending/completed case counts), GATC
+directory, and state/district certificate-expiry overview dashboards — each role scoped to
+its own jurisdiction (state admin sees only their state, district admin only their state +
+district, super admin sees everything).
 
 ### Live accounts (deployed Supabase backend)
 
@@ -97,11 +89,6 @@ password — a **hackathon shortcut**, not a real secret; delete or rotate befor
 | `state.tn@gmail.com` | STATE_ADMIN | Tamil Nadu (TN) |
 | `state.dl@gmail.com` | STATE_ADMIN | Delhi (DL) |
 
-## Demo story
-
-ABC Traders registers a weighing scale (serial `XYZ12345`, 500 kg, Dhanbad) → applies with
-documents → an LM Officer inspects and approves → `CERT-2026-000123` with QR is issued → a
-consumer scans it and sees ✓ VALID → expiry is tracked.
 
 ## Repo layout
 
@@ -110,5 +97,5 @@ consumer scans it and sees ✓ VALID → expiry is tracked.
 ├── frontend/          ← Next.js app       → see frontend/CLAUDE.md
 ├── backend/           ← FastAPI service   → see backend/CLAUDE.md
 ├── database/seed/     ← demo seed data
-└── docs/specs/        ← per-feature specs (01-16)
+└── docs/specs/        ← per-feature specs (01-21)
 ```
