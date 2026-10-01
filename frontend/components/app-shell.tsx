@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
-import { FileText, Gauge, LayoutDashboard, LogOut, Scale, ShieldCheck } from "lucide-react";
+import { FileText, Gauge, LayoutDashboard, LogOut, ShieldCheck } from "lucide-react";
 
+import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -53,11 +54,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     <SidebarProvider>
       <Sidebar collapsible="offcanvas">
         <SidebarHeader>
-          <div className="flex items-center gap-2 px-2 py-1.5">
-            <Scale className="size-5 shrink-0 text-sidebar-primary" aria-hidden="true" />
-            <span className="text-sm font-semibold leading-tight text-sidebar-foreground">
-              Legal Metrology
-            </span>
+          <div className="px-2 py-1.5">
+            <BrandLogo tone="dark" iconClassName="size-5" textClassName="text-sm" />
           </div>
         </SidebarHeader>
         <SidebarContent>
@@ -89,7 +87,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <SidebarInset>
         <header className="flex items-center gap-2 border-b px-4 py-3 md:hidden">
           <SidebarTrigger />
-          <span className="text-sm font-semibold">Legal Metrology</span>
+          <BrandLogo iconClassName="size-5" textClassName="text-sm" />
         </header>
         <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">{children}</main>
       </SidebarInset>

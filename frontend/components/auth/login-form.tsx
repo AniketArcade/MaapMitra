@@ -40,7 +40,7 @@ export function LoginForm() {
     <Card className="w-full max-w-sm">
       <CardHeader>
         <CardTitle className="text-xl">Log in</CardTitle>
-        <CardDescription>Legal Metrology verification portal</CardDescription>
+        <CardDescription>Sign in to manage instruments, applications and certificates.</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} className="grid gap-4" noValidate>

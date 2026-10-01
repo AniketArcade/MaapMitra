@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Legal Metrology",
+  title: "MaapMitra",
   description: "Legal Metrology instrument verification and digital certification",
 };
 
