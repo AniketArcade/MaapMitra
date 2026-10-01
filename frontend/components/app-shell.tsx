@@ -43,6 +43,18 @@ const NAV = [
   { href: "/profile", label: "Profile", icon: User },
 ];
 
+// Spec 19 §6.4: LM_OFFICER gets its own flat sidebar instead of sharing NAV with BUSINESS/GATC —
+// NAV itself is never edited here, since BUSINESS has no certificate list page and GATC is
+// excluded from certificate access entirely (both would hit a dead end on these two links).
+const OFFICER_NAV = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/instruments", label: "Instruments", icon: Gauge },
+  { href: "/applications", label: "Applications", icon: FileText },
+  { href: "/certificates", label: "Certificates", icon: Award },
+  { href: "/certificates/expiring-soon", label: "Expiring soon", icon: Clock3 },
+  { href: "/profile", label: "Profile", icon: User },
+];
+
 // Spec 17 §6.8: SUPER_ADMIN gets a fuller flat sidebar instead of the single "Admin" link
 // DISTRICT_ADMIN still keeps (spec 17 D1; spec 18 D1 keeps DISTRICT_ADMIN on it too, for now).
 const SUPER_ADMIN_NAV = [
@@ -98,9 +110,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       ? SUPER_ADMIN_NAV
       : user.role === "STATE_ADMIN"
         ? STATE_ADMIN_NAV
-        : ADMIN_ROLES.includes(user.role)
-          ? [...NAV, { href: "/admin", label: "Admin", icon: ShieldCheck }]
-          : NAV;
+        : user.role === "LM_OFFICER"
+          ? OFFICER_NAV
+          : ADMIN_ROLES.includes(user.role)
+            ? [...NAV, { href: "/admin", label: "Admin", icon: ShieldCheck }]
+            : NAV;
 
   return (
     <SidebarProvider>

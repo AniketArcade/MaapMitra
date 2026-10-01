@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.core.deps import DB, require_roles
-from app.core.roles import ADMIN_ROLES
+from app.core.roles import ADMIN_ROLES, Role
 from app.models.user import User
 from app.schemas.admin import AdminCertificateStats, DistrictOverviewRow, StateOverviewRow
 from app.schemas.certificate import CertificateOut
@@ -13,17 +13,23 @@ from app.services import admin as service
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 Admin = Annotated[User, Depends(require_roles(*ADMIN_ROLES))]
+# Spec 19 §4: widened for the two certificate-monitoring endpoints only — a new, separate
+# dependency, not a change to ADMIN_ROLES itself (that constant also gates GET /api/users,
+# /api/audit-logs, /api/organizations?type=GATC, state/district-overview, none of which
+# LM_OFFICER should gain). scope_certificates() already resolves correctly for LM_OFFICER via
+# scope_applications()'s existing branch — zero service-layer change needed.
+AdminOrOfficer = Annotated[User, Depends(require_roles(*ADMIN_ROLES, Role.LM_OFFICER))]
 
 
 @router.get("/certificates/stats")
-def get_certificate_stats(user: Admin, db: DB) -> AdminCertificateStats:
+def get_certificate_stats(user: AdminOrOfficer, db: DB) -> AdminCertificateStats:
     by_status, expiring_soon = service.certificate_stats(db, user)
     return AdminCertificateStats.from_counts(by_status, expiring_soon)
 
 
 @router.get("/certificates/expiring-soon")
 def list_expiring_soon(
-    user: Admin, db: DB, paging: Annotated[PageParams, Depends()]
+    user: AdminOrOfficer, db: DB, paging: Annotated[PageParams, Depends()]
 ) -> Page[CertificateOut]:
     items, total = service.expiring_soon(db, user, limit=paging.page_size, offset=paging.offset)
     return Page(

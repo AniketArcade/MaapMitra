@@ -1,5 +1,6 @@
-"""Spec 10: GET /api/admin/certificates/stats and .../expiring-soon — ADMIN_ROLES only,
-jurisdiction-scoped the same way scope_applications/scope_certificates already are."""
+"""Spec 10: GET /api/admin/certificates/stats and .../expiring-soon — ADMIN_ROLES plus, since
+spec 19, LM_OFFICER — jurisdiction-scoped the same way scope_applications/scope_certificates
+already are (an officer's own narrow district scope, not the wider state/national one)."""
 
 from datetime import timedelta
 
@@ -31,7 +32,9 @@ def _set(certificate_id: str, **fields) -> None:  # noqa: ANN001
 
 
 def test_admin_certificates_roles_forbidden(client: TestClient, make_user) -> None:  # noqa: ANN001
-    for role in (Role.BUSINESS, Role.LM_OFFICER, Role.GATC):
+    # LM_OFFICER was admitted here in spec 19 — see test_admin_certificates_scope's officer
+    # assertions below and the dedicated LM_OFFICER scoping tests for its own coverage.
+    for role in (Role.BUSINESS, Role.GATC):
         headers = auth_header(make_user(role))
         assert client.get("/api/admin/certificates/stats", headers=headers).status_code == 403
         assert (
@@ -68,6 +71,34 @@ def test_admin_certificates_scope(client: TestClient, make_user, make_applicatio
     assert numbers(super_admin) == all_numbers
     assert numbers(state_admin) == all_numbers  # both orgs are in JH
     assert numbers(district_admin) == {dhn_cert["certificate_number"]}  # DHN only
+    # Spec 19: LM_OFFICER is admitted to this route too, scoped exactly as narrowly as
+    # DISTRICT_ADMIN (their own district only) — not the wider state-level scope.
+    assert numbers(dhn_officer) == {dhn_cert["certificate_number"]}
+    assert numbers(rnc_officer) == {rnc_cert["certificate_number"]}
+
+
+def test_admin_certificates_stats_scoped_to_officer_district(
+    client: TestClient, make_user, make_application
+) -> None:
+    """Spec 19: GET /admin/certificates/stats as LM_OFFICER counts only their own district's
+    certificates, not their whole state — mirrors test_admin_certificates_scope's district
+    isolation, for the /stats endpoint instead of /expiring-soon."""
+    dhn_officer = make_user(Role.LM_OFFICER)  # JH/DHN (defaults)
+    rnc_officer = make_user(Role.LM_OFFICER, district_code="RNC")
+    dhn_owner = make_user(Role.BUSINESS)
+    rnc_owner = make_user(Role.BUSINESS, org_district="RNC")
+
+    _issue(
+        client, dhn_officer, make_application(dhn_owner, status="APPROVED", officer=dhn_officer).id
+    )
+    _issue(
+        client, rnc_officer, make_application(rnc_owner, status="APPROVED", officer=rnc_officer).id
+    )
+
+    dhn_stats = client.get("/api/admin/certificates/stats", headers=auth_header(dhn_officer)).json()
+    assert dhn_stats["valid"] == 1
+    rnc_stats = client.get("/api/admin/certificates/stats", headers=auth_header(rnc_officer)).json()
+    assert rnc_stats["valid"] == 1
 
 
 def test_admin_certificates_stats_zero_filled_and_inclusive(

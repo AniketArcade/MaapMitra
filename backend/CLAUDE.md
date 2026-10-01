@@ -584,6 +584,7 @@ GET   /api/applications?state_code=&district_code=   # additive filters on the e
 GET   /admin/state-overview       # ADMIN_ROLES; one row per REGIONS state/UT, zero-filled, never paginated (step 17)
 GET   /admin/district-overview    # ADMIN_ROLES; one row per district of one state, zero-filled, never paginated; state_code forced for STATE_ADMIN/DISTRICT_ADMIN, required for SUPER_ADMIN (step 18)
 GET   /api/certificates           # same Reader/scope_certificates as every other certificate endpoint; ?status= filter; first certificate list endpoint (step 17)
+GET   /admin/certificates/{stats,expiring-soon}   # ADMIN_ROLES + LM_OFFICER (step 19); officer sees own district only, same scope_certificates chain
 ```
 
 ### Public verify (step 9, spec `docs/specs/09-public-verify.md`; field list extended by step 13, spec `docs/specs/13-certificate-superseding.md`)
@@ -799,6 +800,36 @@ new routes/service logic over columns that already existed.
   timestamp-diff aggregation that doesn't exist), Instrument-Type/assignee filters on
   `/admin/applications` (real new joins, not a free reuse), editing a user's
   email/role/jurisdiction after creation, and extending this page's data layer to `DISTRICT_ADMIN`.
+
+### LMO frontend (step 19, spec `docs/specs/19-lmo-frontend.md`)
+
+Audited a pasted 28-section "LMO Frontend Specification" against what's already built —
+`LM_OFFICER` is the most fully-built role in this codebase (specs 01/03/05/06/07/08/11/14/15 are
+all largely about it), so almost the entire brief mapped onto existing pages/endpoints under
+different names. Exactly two real gaps survived, both resolved here. No migration, no service
+change — this step widened one router dependency.
+
+- **`GET /admin/certificates/stats` / `.../expiring-soon`**: widened from `ADMIN_ROLES`-only via
+  a **new, separate** `AdminOrOfficer = require_roles(*ADMIN_ROLES, Role.LM_OFFICER)` local to
+  `routers/admin.py` — `ADMIN_ROLES` itself (`core/roles.py`) is deliberately untouched, since it
+  also gates `GET /api/users`, `/api/audit-logs`, `/api/organizations?type=GATC`, and
+  state/district-overview, none of which `LM_OFFICER` should gain. `services/admin.py:
+  certificate_stats()`/`expiring_soon()` needed zero changes: `scope_certificates()` already
+  resolves correctly for an officer via `scope_applications()`'s existing `LM_OFFICER` branch
+  (state **and** district locked) — the same "the data layer already supports it" pattern specs
+  17/18 used, one rank further down.
+- **`GET /api/certificates`**: no change at all — already in the `Reader` role set since spec 17.
+  This was a pure frontend gap (no officer-facing page called it), not a backend one.
+- Everything else in the brief maps onto existing specs unchanged: scrutiny is spec 11's document
+  review checklist, field verification is spec 06, pass/fail is spec 07/08, certificate issuance
+  is spec 08, re-verification already works via `ApplicationType.RE_VERIFICATION`, instrument/
+  access scope is spec 01/02's existing `scope_*` helpers. Dropped as deferred or inapplicable:
+  a structured Query/Deficiency entity (the single `note` field stays the mechanism), a calendar
+  view (the existing `sort=scheduled_asc` list stays), GPS/maps, camera QR scanning, a structured
+  failure-reason taxonomy, an `LM_OFFICER`-scoped "my activity" audit trail (would need a new
+  self-only scoping concept no endpoint has today), `instrument_type`/`application_type` filters
+  on `GET /applications`, notifications, and generic report export — see the spec's §2/§9 for the
+  full reasoning on each.
 
 ## Auth and RBAC (spec: `docs/specs/01-login-rbac.md`)
 

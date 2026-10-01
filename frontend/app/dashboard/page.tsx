@@ -7,12 +7,13 @@ import { StatusBadge } from "@/components/applications/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { api, getApplicationStats } from "@/lib/api";
+import { api, getAdminCertificateStats, getApplicationStats } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { getApplicationMeta, labelFor } from "@/lib/meta";
 import { type Async, useAsync } from "@/lib/use-async";
 import {
   ADMIN_ROLES,
+  type AdminCertificateStats,
   type Application,
   type ApplicationMeta,
   type ApplicationStats,
@@ -310,11 +311,32 @@ function BusinessDashboard({ user }: { user: User }) {
   );
 }
 
+// Spec 19 §6.1: the one new KPI this spec adds to the officer dashboard — reuses
+// GET /admin/certificates/stats, now admitted for LM_OFFICER (spec 19 §4), already scoped to
+// the officer's own district via scope_certificates -> scope_applications.
+function ExpiringCertsSection({ stats }: { stats: Async<AdminCertificateStats> }) {
+  if (stats.status === "loading") return null;
+  if (stats.status === "error") {
+    return <RetryError message="Couldn't load certificate stats." onRetry={stats.retry} />;
+  }
+  const count = stats.data?.expiring_soon ?? 0;
+  return (
+    <Link
+      href="/certificates/expiring-soon"
+      className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm"
+    >
+      <span>Certificates expiring soon</span>
+      <Badge variant="secondary">{count}</Badge>
+    </Link>
+  );
+}
+
 function OfficerDashboard({ user }: { user: User }) {
   const instruments = useAsync(() =>
     api<Page<Instrument>>("/instruments?page_size=1").then((p) => p.total),
   );
   const stats = useAsync(() => getApplicationStats());
+  const certStats = useAsync(() => getAdminCertificateStats());
   const submitted = useAsync(() =>
     api<Page<Application>>("/applications?status=SUBMITTED&page_size=5"),
   );
@@ -346,6 +368,7 @@ function OfficerDashboard({ user }: { user: User }) {
           meta={meta}
           empty={{ message: "No applications in your district yet" }}
         />
+        <ExpiringCertsSection stats={certStats} />
         <NeedsAttentionSection
           rules={[
             { status: "SUBMITTED", hint: "Start document review", data: submitted },

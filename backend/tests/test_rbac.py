@@ -169,3 +169,25 @@ def test_list_certificates_rbac(client: TestClient, make_user, role: Role) -> No
     # only GATC is excluded (never had certificate access anywhere in this codebase).
     res = client.get("/api/certificates", headers=auth_header(make_user(role)))
     assert res.status_code == (403 if role == Role.GATC else 200)
+
+
+# ---------------------------------------------------------------------------
+# Spec 19: GET /admin/certificates/{stats,expiring-soon} widened to admit LM_OFFICER, via a new
+# AdminOrOfficer dependency local to routers/admin.py — ADMIN_ROLES itself is untouched, so every
+# other ADMIN_ROLES-gated endpoint above (users, audit-logs, GATC directory) must still 403
+# LM_OFFICER unchanged; those sweeps above already cover that for free (ALL_ROLES includes it).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("role", ALL_ROLES)
+def test_admin_certificate_endpoints_admit_officer(
+    client: TestClient, make_user, role: Role
+) -> None:  # noqa: ANN001
+    allowed = role in (Role.SUPER_ADMIN, Role.STATE_ADMIN, Role.DISTRICT_ADMIN, Role.LM_OFFICER)
+    headers = auth_header(make_user(role))
+    assert client.get("/api/admin/certificates/stats", headers=headers).status_code == (
+        200 if allowed else 403
+    )
+    assert client.get("/api/admin/certificates/expiring-soon", headers=headers).status_code == (
+        200 if allowed else 403
+    )
