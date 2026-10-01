@@ -12,6 +12,7 @@ from app.middleware.body_limit import BodySizeLimitMiddleware
 from app.routers import (
     admin,
     applications,
+    audit,
     auth,
     certificates,
     documents,
@@ -20,6 +21,7 @@ from app.routers import (
     inspections,
     instruments,
     jobs,
+    organizations,
     public,
     users,
 )
@@ -80,6 +82,8 @@ def create_app() -> FastAPI:
         jobs.router,
         admin.router,
         gatc.router,
+        audit.router,
+        organizations.router,
     ):
         app.include_router(router, prefix="/api")
     return app

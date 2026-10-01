@@ -102,6 +102,8 @@ def list_applications(
     q: Annotated[str | None, Query(max_length=100)] = None,
     status_filter: Annotated[ApplicationStatus | None, Query(alias="status")] = None,
     instrument_id: uuid.UUID | None = None,
+    state_code: Annotated[str | None, Query(max_length=2)] = None,
+    district_code: Annotated[str | None, Query(max_length=4)] = None,
     sort: Literal["created_desc", "scheduled_asc"] = "created_desc",
 ) -> Page[ApplicationOut]:
     items, total = service.list_applications(
@@ -110,6 +112,8 @@ def list_applications(
         q=q.strip() if q else None,
         status=status_filter,
         instrument_id=instrument_id,
+        state_code=state_code,
+        district_code=district_code,
         limit=paging.page_size,
         offset=paging.offset,
         sort=sort,

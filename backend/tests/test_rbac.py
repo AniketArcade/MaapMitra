@@ -113,3 +113,45 @@ def test_create_user_duplicate_email(client: TestClient, make_user) -> None:  # 
         "/api/users", json=_officer_payload(email="NEW.officer@lm.demo"), headers=auth_header(admin)
     )
     assert res.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Spec 17: every new/extended endpoint is SUPER_ADMIN-only (except the harmless, unrestricted
+# state_code/district_code additions to GET /api/applications and the already-shared
+# GET /admin/state-overview, both covered by their own test files' own RBAC cases).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("role", ALL_ROLES)
+def test_list_users_only_super_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+    res = client.get("/api/users", headers=auth_header(make_user(role)))
+    assert res.status_code == (200 if role == Role.SUPER_ADMIN else 403)
+
+
+@pytest.mark.parametrize("role", ALL_ROLES)
+def test_patch_user_only_super_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+    target = make_user(Role.LM_OFFICER)
+    res = client.patch(
+        f"/api/users/{target.id}", json={"is_active": False}, headers=auth_header(make_user(role))
+    )
+    assert res.status_code == (200 if role == Role.SUPER_ADMIN else 403)
+
+
+@pytest.mark.parametrize("role", ALL_ROLES)
+def test_list_audit_logs_only_super_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+    res = client.get("/api/audit-logs", headers=auth_header(make_user(role)))
+    assert res.status_code == (200 if role == Role.SUPER_ADMIN else 403)
+
+
+@pytest.mark.parametrize("role", ALL_ROLES)
+def test_list_gatc_directory_only_super_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+    res = client.get("/api/organizations?type=GATC", headers=auth_header(make_user(role)))
+    assert res.status_code == (200 if role == Role.SUPER_ADMIN else 403)
+
+
+@pytest.mark.parametrize("role", ALL_ROLES)
+def test_list_certificates_rbac(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+    # Same Reader role set as every other certificate endpoint (BUSINESS/LM_OFFICER/*_ADMIN) —
+    # only GATC is excluded (never had certificate access anywhere in this codebase).
+    res = client.get("/api/certificates", headers=auth_header(make_user(role)))
+    assert res.status_code == (403 if role == Role.GATC else 200)

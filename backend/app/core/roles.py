@@ -28,3 +28,8 @@ ROLE_RANK: dict[Role, int] = {
 
 ORG_ROLES: frozenset[Role] = frozenset({Role.BUSINESS, Role.GATC})
 ADMIN_ROLES: frozenset[Role] = frozenset({Role.SUPER_ADMIN, Role.STATE_ADMIN, Role.DISTRICT_ADMIN})
+
+# Spec 17: GET /api/users lists "official" accounts only — never BUSINESS (self-registers,
+# never admin-managed here) or GATC (managed through the GATC directory,
+# GET /api/organizations?type=GATC).
+OFFICIAL_ROLES: frozenset[Role] = ADMIN_ROLES | {Role.LM_OFFICER}
