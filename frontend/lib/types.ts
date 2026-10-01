@@ -412,6 +412,18 @@ export type StateOverviewRow = {
   certs_expired: number;
 };
 
+// Mirrors backend/app/schemas/admin.py's DistrictOverviewRow (spec 18) — the district-level
+// sibling of StateOverviewRow, one state at a time.
+export type DistrictOverviewRow = {
+  state_code: string;
+  district_code: string;
+  district_name: string;
+  instrument_count: number;
+  pending_applications: number;
+  certs_valid: number;
+  certs_expired: number;
+};
+
 // Mirrors backend/app/schemas/user.py's UserCreate (officials only — BUSINESS self-registers,
 // GATC is provisioned outside this form, see spec 17 D2).
 export type CreateUserRequest = {

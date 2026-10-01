@@ -156,3 +156,143 @@ def test_patch_writes_audit_row(client: TestClient, make_user) -> None:
     assert len(rows) == 1
     assert rows[0].details == {"is_active": False, "role": "LM_OFFICER"}
     assert rows[0].actor_user_id == admin.id
+
+
+# ---------------------------------------------------------------------------
+# Spec 18: STATE_ADMIN scoping for GET/POST /api/users and PATCH /api/users/{id}. Router-level
+# admission (both SUPER_ADMIN and STATE_ADMIN get past the role gate) lives in test_rbac.py; these
+# tests cover the actor-aware narrowing that makes it safe to admit STATE_ADMIN at all.
+# ---------------------------------------------------------------------------
+
+
+def _new_user_payload(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "email": "new.district.officer@lm.demo",
+        "full_name": "New District Officer",
+        "role": "LM_OFFICER",
+        "password": PASSWORD,
+        "state_code": "JH",
+        "district_code": "DHN",
+    }
+    body.update(overrides)
+    return body
+
+
+def test_state_admin_list_scoped_to_own_state(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    jh_officer = make_user(Role.LM_OFFICER)  # JH/DHN by default
+    ka_officer = make_user(Role.LM_OFFICER, state_code="KA", district_code="BU")
+    peer = make_user(Role.STATE_ADMIN, email="peer@test.demo")
+    super_admin = make_user(Role.SUPER_ADMIN)
+
+    res = client.get("/api/users", headers=auth_header(state_admin))
+    assert res.status_code == 200, res.text
+    ids = {u["id"] for u in res.json()["items"]}
+    assert ids == {str(jh_officer.id)}
+    assert str(ka_officer.id) not in ids
+    assert str(peer.id) not in ids
+    assert str(super_admin.id) not in ids
+    assert str(state_admin.id) not in ids  # STATE_ADMIN itself is a peer rank, not visible either
+
+
+def test_state_admin_list_state_code_mismatch_is_422(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    res = client.get("/api/users?state_code=KA", headers=auth_header(state_admin))
+    assert res.status_code == 422, res.text
+    assert res.json()["detail"][0]["loc"] == ["body", "state_code"]
+
+
+def test_state_admin_list_role_filter_rejects_peer_or_above(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)
+    for role in ("STATE_ADMIN", "SUPER_ADMIN"):
+        res = client.get(f"/api/users?role={role}", headers=auth_header(state_admin))
+        assert res.status_code == 403, res.text
+
+
+def test_state_admin_list_role_filter_admits_lower_ranks(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    officer = make_user(Role.LM_OFFICER)  # JH/DHN
+
+    res = client.get("/api/users?role=DISTRICT_ADMIN", headers=auth_header(state_admin))
+    assert res.status_code == 200, res.text
+    assert {u["id"] for u in res.json()["items"]} == {str(district_admin.id)}
+
+    res = client.get("/api/users?role=LM_OFFICER", headers=auth_header(state_admin))
+    assert res.status_code == 200, res.text
+    assert {u["id"] for u in res.json()["items"]} == {str(officer.id)}
+
+
+def test_state_admin_create_in_state_lower_rank_succeeds(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    for role in ("DISTRICT_ADMIN", "LM_OFFICER"):
+        res = client.post(
+            "/api/users",
+            json=_new_user_payload(role=role, email=f"{role.lower()}@test.demo"),
+            headers=auth_header(state_admin),
+        )
+        assert res.status_code == 201, res.text
+        assert res.json()["role"] == role
+        assert res.json()["state_code"] == "JH"
+
+
+def test_state_admin_create_rejects_state_admin_role(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)
+    res = client.post(
+        "/api/users",
+        json=_new_user_payload(role="STATE_ADMIN", district_code=None),
+        headers=auth_header(state_admin),
+    )
+    assert res.status_code == 422, res.text
+    assert res.json()["detail"][0]["loc"] == ["body", "role"]
+
+
+def test_state_admin_create_rejects_cross_state(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    res = client.post(
+        "/api/users",
+        json=_new_user_payload(state_code="KA", district_code="BU"),
+        headers=auth_header(state_admin),
+    )
+    assert res.status_code == 422, res.text
+    assert res.json()["detail"][0]["loc"] == ["body", "state_code"]
+
+
+def test_state_admin_patch_in_state_lower_rank_succeeds(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    officer = make_user(Role.LM_OFFICER)  # JH/DHN
+    res = client.patch(
+        f"/api/users/{officer.id}", json={"is_active": False}, headers=auth_header(state_admin)
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["is_active"] is False
+
+
+def test_state_admin_patch_cross_state_is_403(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    officer = make_user(Role.LM_OFFICER, state_code="KA", district_code="BU")
+    res = client.patch(
+        f"/api/users/{officer.id}", json={"is_active": False}, headers=auth_header(state_admin)
+    )
+    assert res.status_code == 403, res.text
+
+
+def test_state_admin_patch_peer_or_above_is_403(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    peer = make_user(Role.STATE_ADMIN, email="peer@test.demo")
+    super_admin = make_user(Role.SUPER_ADMIN)
+    for target in (peer, super_admin):
+        res = client.patch(
+            f"/api/users/{target.id}", json={"is_active": False}, headers=auth_header(state_admin)
+        )
+        assert res.status_code == 403, res.text
+
+
+def test_state_admin_self_deactivation_still_409(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)
+    res = client.patch(
+        f"/api/users/{state_admin.id}",
+        json={"is_active": False},
+        headers=auth_header(state_admin),
+    )
+    assert res.status_code == 409, res.text

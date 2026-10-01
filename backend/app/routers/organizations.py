@@ -11,14 +11,18 @@ from app.services import organizations as org_service
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 
-SuperAdmin = Annotated[User, Depends(require_roles(Role.SUPER_ADMIN))]
+# Spec 18 §4: widened from SUPER_ADMIN-only — gatc_directory() already calls
+# scope_organizations(select(...), actor), which already has a STATE_ADMIN branch restricting to
+# the caller's own state_code. Zero service changes needed for this one (unlike users/audit-logs
+# below, which have no scope_* floor of their own).
+SuperOrStateAdmin = Annotated[User, Depends(require_roles(Role.SUPER_ADMIN, Role.STATE_ADMIN))]
 
 
 # Spec 17 D3: the only directory this step builds. `type` is required — anything but "GATC"
 # is 422, not a 404 or an empty page, since no other directory exists yet to return.
 @router.get("")
 def list_organizations(
-    actor: SuperAdmin,
+    actor: SuperOrStateAdmin,
     db: DB,
     paging: Annotated[PageParams, Depends()],
     type: Literal["GATC"],

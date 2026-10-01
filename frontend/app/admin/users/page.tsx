@@ -36,14 +36,26 @@ const ROLE_OPTIONS = [
   { value: "DISTRICT_ADMIN", label: "District Admin" },
   { value: "LM_OFFICER", label: "LM Officer" },
 ];
+// Spec 18 §4/D2: a STATE_ADMIN viewer may only see strictly-lower ranks — requesting a peer or
+// above 403s server-side, so those options are dropped here rather than offered and rejected.
+const STATE_ADMIN_ROLE_OPTIONS = [
+  { value: ALL, label: "All roles" },
+  { value: "DISTRICT_ADMIN", label: "District Admin" },
+  { value: "LM_OFFICER", label: "LM Officer" },
+];
 
 type State =
   | { kind: "loading" }
   | { kind: "error"; message: string }
   | { kind: "ready"; data: Page<AdminUser> };
 
-// Spec 17 §6.6: official-account directory + Create + per-row Activate/Deactivate.
+// Spec 17 §6.6: official-account directory + Create + per-row Activate/Deactivate. Spec 18: for a
+// STATE_ADMIN viewer, GET /api/users rejects (422) a mismatched state_code and a peer-or-above
+// role filter (403) — so the State filter is hidden and the role filter is restricted, rather
+// than offering choices the server would reject.
 function UsersList() {
+  const { user: viewer } = useAuth();
+  const isStateAdmin = viewer?.role === "STATE_ADMIN";
   const [instrumentMeta, setInstrumentMeta] = useState<InstrumentMeta | null>(null);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -73,7 +85,7 @@ function UsersList() {
     const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     if (debounced) params.set("q", debounced);
     if (role !== ALL) params.set("role", role);
-    if (stateCode) params.set("state_code", stateCode);
+    if (stateCode && !isStateAdmin) params.set("state_code", stateCode);
     if (districtCode) params.set("district_code", districtCode);
     if (isActive) params.set("is_active", isActive);
     getUsers(params).then(
@@ -90,7 +102,7 @@ function UsersList() {
     return () => {
       cancelled = true;
     };
-  }, [debounced, role, stateCode, districtCode, isActive, page, refreshNonce]);
+  }, [debounced, role, stateCode, districtCode, isActive, page, refreshNonce, isStateAdmin]);
 
   async function toggle(userId: string, nextActive: boolean) {
     await patchUserActive(userId, nextActive);
@@ -104,8 +116,9 @@ function UsersList() {
 
   const data = state.kind === "ready" ? state.data : null;
   const lastPage = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+  const effectiveStateCode = isStateAdmin ? (viewer?.state_code ?? "") : stateCode;
   const districtsForState =
-    instrumentMeta?.regions.find((r) => r.state_code === stateCode)?.districts ?? [];
+    instrumentMeta?.regions.find((r) => r.state_code === effectiveStateCode)?.districts ?? [];
   const stateOptions = [
     { value: "", label: "All states" },
     ...(instrumentMeta?.regions ?? []).map((r) => ({ value: r.state_code, label: r.state_name })),
@@ -136,7 +149,9 @@ function UsersList() {
         </DialogContent>
       </Dialog>
 
-      <div className="grid gap-3 sm:grid-cols-[1fr_10rem_10rem_10rem_8rem]">
+      <div
+        className={`grid gap-3 ${isStateAdmin ? "sm:grid-cols-[1fr_10rem_10rem_8rem]" : "sm:grid-cols-[1fr_10rem_10rem_10rem_8rem]"}`}
+      >
         <Input
           type="search"
           placeholder="Search by name or email"
@@ -150,23 +165,25 @@ function UsersList() {
           name="role_filter"
           label="Role"
           value={role}
-          options={ROLE_OPTIONS}
+          options={isStateAdmin ? STATE_ADMIN_ROLE_OPTIONS : ROLE_OPTIONS}
           onChange={(v) => {
             setRole(v || ALL);
             setPage(1);
           }}
         />
-        <SelectField
-          name="state_filter"
-          label="State"
-          value={stateCode}
-          options={stateOptions}
-          onChange={(v) => {
-            setStateCode(v);
-            setDistrictCode("");
-            setPage(1);
-          }}
-        />
+        {isStateAdmin ? null : (
+          <SelectField
+            name="state_filter"
+            label="State"
+            value={stateCode}
+            options={stateOptions}
+            onChange={(v) => {
+              setStateCode(v);
+              setDistrictCode("");
+              setPage(1);
+            }}
+          />
+        )}
         <SelectField
           name="district_filter"
           label="District"
@@ -176,7 +193,7 @@ function UsersList() {
             setDistrictCode(v);
             setPage(1);
           }}
-          disabled={!stateCode}
+          disabled={!effectiveStateCode}
         />
         <SelectField
           name="active_filter"
@@ -208,7 +225,7 @@ function UsersList() {
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
-                <TableHead>State</TableHead>
+                {isStateAdmin ? null : <TableHead>State</TableHead>}
                 <TableHead>District</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead />
@@ -220,7 +237,7 @@ function UsersList() {
                   <TableCell>{u.full_name}</TableCell>
                   <TableCell className="text-sm">{u.email}</TableCell>
                   <TableCell>{u.role}</TableCell>
-                  <TableCell>{u.state_code ?? "—"}</TableCell>
+                  {isStateAdmin ? null : <TableCell>{u.state_code ?? "—"}</TableCell>}
                   <TableCell>{u.district_code ?? "—"}</TableCell>
                   <TableCell>
                     <ActiveBadge active={u.is_active} />
@@ -275,6 +292,8 @@ function UsersList() {
 
 export default function UsersPage() {
   const { user } = useAuth();
-  if (!user || user.role !== "SUPER_ADMIN") return <StateMessage title={NO_ACCESS} />;
+  if (!user || !["SUPER_ADMIN", "STATE_ADMIN"].includes(user.role)) {
+    return <StateMessage title={NO_ACCESS} />;
+  }
   return <UsersList />;
 }

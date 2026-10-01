@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from fastapi.testclient import TestClient
 
 from app.core.roles import Role
-from tests.conftest import PASSWORD, auth_header
+from tests.conftest import PASSWORD, auth_header, register_body
 
 
 def test_system_actor_row_has_null_actor_name(client: TestClient, make_user) -> None:
@@ -105,3 +105,88 @@ def test_pagination(client: TestClient, make_user) -> None:
     body = res.json()
     assert body["total"] == 4
     assert len(body["items"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Spec 18 §4/D4: jurisdiction filter for a STATE_ADMIN actor. Router-level admission lives in
+# test_rbac.py; these cover the actual filtering logic.
+# ---------------------------------------------------------------------------
+
+
+def test_state_admin_sees_only_in_state_official_actor_rows(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    jh_officer = make_user(Role.LM_OFFICER, email="jh.officer@test.demo")  # JH/DHN
+    ka_officer = make_user(
+        Role.LM_OFFICER, email="ka.officer@test.demo", state_code="KA", district_code="BU"
+    )
+    client.post("/api/auth/login", json={"email": jh_officer.email, "password": PASSWORD})
+    client.post("/api/auth/login", json={"email": ka_officer.email, "password": PASSWORD})
+
+    res = client.get("/api/audit-logs?action=LOGIN_SUCCEEDED", headers=auth_header(state_admin))
+    assert res.status_code == 200, res.text
+    actor_ids = {i["actor_user_id"] for i in res.json()["items"]}
+    assert str(jh_officer.id) in actor_ids
+    assert str(ka_officer.id) not in actor_ids
+
+
+def test_state_admin_sees_org_actor_rows_via_organization_state(
+    client: TestClient, make_user
+) -> None:
+    """A BUSINESS/GATC actor has state_code=NULL on their own users row (officials-only column)
+    — their jurisdiction is only reachable via users.organization_id -> organizations.state_code,
+    the second half of D4's OR condition."""
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+
+    jh_reg = client.post("/api/auth/register", json=register_body(email="jh.owner@test.demo"))
+    assert jh_reg.status_code == 201, jh_reg.text
+    jh_owner_id = jh_reg.json()["user"]["id"]
+
+    ka_reg = client.post(
+        "/api/auth/register",
+        json=register_body(
+            email="ka.owner@test.demo",
+            organization_name="KA Traders",
+            state_code="KA",
+            district_code="BU",
+        ),
+    )
+    assert ka_reg.status_code == 201, ka_reg.text
+    ka_owner_id = ka_reg.json()["user"]["id"]
+
+    res = client.get("/api/audit-logs?action=USER_REGISTERED", headers=auth_header(state_admin))
+    assert res.status_code == 200, res.text
+    actor_ids = {i["actor_user_id"] for i in res.json()["items"]}
+    assert jh_owner_id in actor_ids
+    assert ka_owner_id not in actor_ids
+
+
+def test_state_admin_excludes_system_actor_rows(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)
+    super_admin = make_user(Role.SUPER_ADMIN)
+    client.post("/api/auth/login", json={"email": "nobody@test.demo", "password": "wrong-pass"})
+
+    res = client.get("/api/audit-logs?action=LOGIN_FAILED", headers=auth_header(state_admin))
+    assert res.status_code == 200, res.text
+    assert res.json()["items"] == []
+
+    res = client.get("/api/audit-logs?action=LOGIN_FAILED", headers=auth_header(super_admin))
+    assert len(res.json()["items"]) == 1
+
+
+def test_state_admin_jurisdiction_filter_composes_with_action_filter(
+    client: TestClient, make_user
+) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    jh_officer = make_user(Role.LM_OFFICER)  # JH/DHN
+    ka_officer = make_user(Role.LM_OFFICER, state_code="KA", district_code="BU")
+    client.patch(
+        f"/api/users/{jh_officer.id}", json={"is_active": False}, headers=auth_header(state_admin)
+    )
+    # A SUPER_ADMIN deactivating the KA officer — this is the row the state_admin must never see.
+    make_user(Role.SUPER_ADMIN)
+
+    res = client.get("/api/audit-logs?action=USER_STATUS_CHANGED", headers=auth_header(state_admin))
+    assert res.status_code == 200, res.text
+    entity_ids = {i["entity_id"] for i in res.json()["items"]}
+    assert str(jh_officer.id) in entity_ids
+    assert str(ka_officer.id) not in entity_ids

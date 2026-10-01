@@ -34,3 +34,18 @@ class StateOverviewRow(BaseModel):
     pending_applications: int
     certs_valid: int
     certs_expired: int
+
+
+class DistrictOverviewRow(BaseModel):
+    """Spec 18 §4: the district-level sibling of StateOverviewRow — one row per district of a
+    single state, always present and zero-filled. state_code is kept for context even though
+    every row in one response shares the same value: district codes are not globally unique in
+    REGIONS (e.g. "CHA" exists under more than one state), unlike state codes."""
+
+    state_code: str
+    district_code: str
+    district_name: str
+    instrument_count: int
+    pending_applications: int
+    certs_valid: int
+    certs_expired: int
