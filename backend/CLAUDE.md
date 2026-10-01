@@ -575,12 +575,14 @@ PATCH /api/applications/{id}/review-checklist   # LM_OFFICER only, DOCUMENT_REVI
 DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSPECTION evidence (step 6)
 GET   /api/gatc/eligible          # LM_OFFICER only; ?category_id=<id>, jurisdiction-scoped GATC orgs (step 15)
 GET   /api/gatc/{organization_id}/users   # LM_OFFICER only; active GATC-role users of one org (step 15)
-GET   /api/users                  # SUPER_ADMIN only; official accounts (role in OFFICIAL_ROLES), filters role/state_code/district_code/is_active/q; ?role=LM_OFFICER populates pending_cases/completed_cases per officer (step 17)
-PATCH /api/users/{id}             # SUPER_ADMIN only; body {is_active} only; 409 on self-deactivation (step 17)
-GET   /api/audit-logs             # SUPER_ADMIN only; filters date_from/date_to/actor_user_id/action/entity_type; actor_name null = system actor (step 17)
-GET   /api/organizations?type=GATC   # SUPER_ADMIN only; GATC directory with live pending/completed case counts per org (step 17)
+GET   /api/users                  # SUPER_ADMIN + STATE_ADMIN (own state, step 18); official accounts (role in OFFICIAL_ROLES), filters role/state_code/district_code/is_active/q; ?role=LM_OFFICER populates pending_cases/completed_cases per officer (step 17)
+POST  /api/users                  # SUPER_ADMIN (any role) + STATE_ADMIN (DISTRICT_ADMIN/LM_OFFICER only, own state) (step 17, extended step 18)
+PATCH /api/users/{id}             # SUPER_ADMIN + STATE_ADMIN (own state, strictly lower rank, step 18); body {is_active} only; 409 on self-deactivation (step 17)
+GET   /api/audit-logs             # SUPER_ADMIN + STATE_ADMIN (own-state jurisdiction filter, step 18); filters date_from/date_to/actor_user_id/action/entity_type; actor_name null = system actor (step 17)
+GET   /api/organizations?type=GATC   # SUPER_ADMIN + STATE_ADMIN (own state, step 18); GATC directory with live pending/completed case counts per org (step 17)
 GET   /api/applications?state_code=&district_code=   # additive filters on the existing list, any role (no-op for jurisdiction-locked callers) (step 17)
 GET   /admin/state-overview       # ADMIN_ROLES; one row per REGIONS state/UT, zero-filled, never paginated (step 17)
+GET   /admin/district-overview    # ADMIN_ROLES; one row per district of one state, zero-filled, never paginated; state_code forced for STATE_ADMIN/DISTRICT_ADMIN, required for SUPER_ADMIN (step 18)
 GET   /api/certificates           # same Reader/scope_certificates as every other certificate endpoint; ?status= filter; first certificate list endpoint (step 17)
 ```
 
@@ -730,6 +732,73 @@ existed.
   data model, no named legal source), an India map, a CSV/PDF export engine, trend charts, a
   dynamic state/district editor (`REGIONS` stays a code constant), editing a user's
   email/role/jurisdiction after creation, and extending this page to `STATE_ADMIN`/`DISTRICT_ADMIN`.
+
+### State Admin (step 18, spec `docs/specs/18-state-admin.md`)
+
+Turns the data layer's existing `STATE_ADMIN` support (every `scope_*` helper already had a
+branch for it) into an actual page, one rank down from spec 17. No migration — every endpoint is
+new routes/service logic over columns that already existed.
+
+- Most of the surface needed **zero backend change**: `GET /api/applications`,
+  `GET /api/applications/stats`, `GET /api/instruments`, `GET /api/certificates`,
+  `GET /admin/certificates/{stats,expiring-soon}` already admitted `STATE_ADMIN` and were already
+  correctly scoped to the caller's own state via `scope_applications`/`scope_instruments`/
+  `scope_certificates`. This step's job for those was purely a new frontend.
+- **`GET /api/organizations?type=GATC`**: router dependency widened to
+  `require_roles(Role.SUPER_ADMIN, Role.STATE_ADMIN)` — **zero service change**.
+  `services/organizations.py: gatc_directory()` already calls `scope_organizations(select(...),
+  user)`, which already had the `STATE_ADMIN` branch; its own docstring anticipated exactly this
+  reuse. A `STATE_ADMIN`-sent `state_code` filter that mismatches their own simply ANDs to an
+  empty page (no reject) — `scope_organizations()` already floors the query.
+- **`GET /api/users`**, **`POST /api/users`**, **`PATCH /api/users/{id}`**: unlike organizations,
+  `users` has no `scope_*` helper of its own (it's permission-gated, not row-owned-by-org data),
+  so widening the router dependency alone would have let a `STATE_ADMIN` query another state's
+  officials — the one real risk in this step. `services/users.py` gained explicit actor-aware
+  checks instead:
+  - `list_users(db, actor, ...)` (actor is now a required param): for a `STATE_ADMIN` caller, a
+    client-sent `state_code` that mismatches their own → `422 Unprocessable` (reject, never
+    silently override — a wrong-but-"successful" query is worse than a visible error); otherwise
+    `state_code` is forced to `actor.state_code`. An explicit `role` filter for a peer-or-above
+    rank (`ROLE_RANK[role] >= ROLE_RANK[actor.role]`) → `403`; omitting `role` implicitly narrows
+    the base query to `{DISTRICT_ADMIN, LM_OFFICER}` (not an error) — this is `ROLE_RANK`'s
+    (`core/roles.py`) first real use anywhere in the codebase.
+  - `create_user()`: a `STATE_ADMIN` actor may only create `role in {DISTRICT_ADMIN, LM_OFFICER}`
+    (`422` field `role` otherwise — `UserCreate.role`'s schema-level `Literal` still admits
+    `STATE_ADMIN` too, for `SUPER_ADMIN` callers; this is a narrower service-level check, not a
+    schema change) and `state_code` must equal their own (`422` field `state_code` otherwise).
+  - `set_active()`: a `STATE_ADMIN` actor may only target `user.state_code == actor.state_code`
+    **and** `ROLE_RANK[user.role] < ROLE_RANK[actor.role]` (`403` otherwise). Checked **after**
+    the existing unconditional self-deactivation `409` guard — ordering matters, since
+    `ROLE_RANK[self.role] < ROLE_RANK[self.role]` is false and would otherwise let the rank check
+    mask the more specific self-deactivation error.
+- **`GET /api/audit-logs`** — the one genuinely hard piece: `audit_logs` has no jurisdiction
+  column (by design, a cross-cutting system table). `list_audit_logs(db, actor, ...)` resolves a
+  `STATE_ADMIN` actor's own-state floor via two outer joins —
+  `AuditLog.actor_user_id -> users.state_code` (covers official actors) OR
+  `users.organization_id -> organizations.state_code` (covers `BUSINESS`/`GATC` actors, whose own
+  `state_code` column is `NULL`). Because both are outer joins, a system-actor row
+  (`actor_user_id IS NULL`, e.g. the expiry job's `CERTIFICATE_EXPIRED`) has `NULL` on both sides
+  and is excluded by the same `WHERE` — a **disclosed Phase-1 gap** (system rows are invisible to
+  a `STATE_ADMIN`), not a silent one. Resolving it properly needs an `entity_type`-specific join
+  (certificate -> application -> state_code) not built here.
+- **`GET /admin/district-overview`** (new, `app/schemas/admin.py: DistrictOverviewRow`,
+  `app/services/admin.py: district_overview()`): a direct structural copy of `state_overview()`
+  one level down — same 3-query `GROUP BY` pattern over `scope_instruments`/`scope_applications`/
+  `scope_certificates`, same "`scope_certificates()` already joins `Certificate -> Application`
+  internally — never join it again" warning. For `STATE_ADMIN`/`DISTRICT_ADMIN`, any client-sent
+  `state_code` is **overridden**, not rejected — this is read-only aggregate data already
+  scope-floored, unlike the user-identity endpoints above. `SUPER_ADMIN` must supply one (`422` if
+  missing, `404` if not a real state) to drill into one state from the existing state-wise table.
+  Reuses the router's existing `Admin = require_roles(*ADMIN_ROLES)` — no new dependency, so
+  `DISTRICT_ADMIN` can call it too (harmless; no frontend page uses it for that role yet).
+- `STATE_ADMIN` only for Phase 1 (same sequencing spec 17 used for `SUPER_ADMIN`): `DISTRICT_ADMIN`
+  keeps today's plain `ExpiryDashboard`, completely untouched by this step — the data layer
+  already generalizes to it for free, just no frontend page built yet.
+- Out of scope, recorded in the spec's §9: an enforcement module, notification center, CSV/PDF
+  export, trend charts, "Average Scrutiny Time" (needs an `application_status_history`
+  timestamp-diff aggregation that doesn't exist), Instrument-Type/assignee filters on
+  `/admin/applications` (real new joins, not a free reuse), editing a user's
+  email/role/jurisdiction after creation, and extending this page's data layer to `DISTRICT_ADMIN`.
 
 ## Auth and RBAC (spec: `docs/specs/01-login-rbac.md`)
 

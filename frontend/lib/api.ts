@@ -7,6 +7,7 @@ import type {
   AuthResponse,
   Certificate,
   CreateUserRequest,
+  DistrictOverviewRow,
   GatcDirectoryEntry,
   GatcEligibleOrg,
   GatcOrgUser,
@@ -211,6 +212,14 @@ export function getGatcDirectory(params: URLSearchParams): Promise<Page<GatcDire
 // Not cached (like getApplicationStats above): the Super Admin dashboard refetches on retry/focus.
 export function getStateOverview(): Promise<StateOverviewRow[]> {
   return api<StateOverviewRow[]>("/admin/state-overview");
+}
+
+// Spec 18 §4: the district-level sibling of getStateOverview(). stateCode is only meaningful for
+// a future SUPER_ADMIN drill-in from the state-overview table — a STATE_ADMIN's own dashboard
+// never passes it, since the backend forces it to the caller's own state regardless.
+export function getDistrictOverview(stateCode?: string): Promise<DistrictOverviewRow[]> {
+  const query = stateCode ? `?state_code=${stateCode}` : "";
+  return api<DistrictOverviewRow[]>(`/admin/district-overview${query}`);
 }
 
 export function getCertificates(params: URLSearchParams): Promise<Page<Certificate>> {

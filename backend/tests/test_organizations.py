@@ -120,6 +120,34 @@ def test_state_district_and_q_filters(client: TestClient, make_user) -> None:
     assert {o["id"] for o in res.json()["items"]} == {str(dhn.organization_id)}
 
 
+def test_state_admin_sees_only_own_state_gatc_orgs(client: TestClient, make_user) -> None:
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    jh_gatc = make_user(Role.GATC, gatc_eligible_category_ids=[15])  # JH/DHN by default
+    ka_gatc = make_user(
+        Role.GATC, gatc_eligible_category_ids=[15], org_state="KA", org_district="BU"
+    )
+
+    res = client.get("/api/organizations?type=GATC", headers=auth_header(state_admin))
+    assert res.status_code == 200, res.text
+    ids = {o["id"] for o in res.json()["items"]}
+    assert ids == {str(jh_gatc.organization_id)}
+    assert str(ka_gatc.organization_id) not in ids
+
+
+def test_state_admin_cross_state_filter_is_empty_not_rejected(
+    client: TestClient, make_user
+) -> None:
+    """Documents the organizations-vs-users asymmetry (spec 18 §4): scope_organizations() already
+    floors every query to the caller's own state, so a mismatched state_code filter just ANDs to
+    an empty page here — unlike GET /api/users, which has no such floor and must reject (422)."""
+    state_admin = make_user(Role.STATE_ADMIN)  # JH
+    make_user(Role.GATC, gatc_eligible_category_ids=[15])  # JH/DHN, would match with no filter
+
+    res = client.get("/api/organizations?type=GATC&state_code=KA", headers=auth_header(state_admin))
+    assert res.status_code == 200, res.text
+    assert res.json()["items"] == []
+
+
 def test_pending_and_completed_case_counts(
     client: TestClient, make_user, make_instrument, make_application
 ) -> None:

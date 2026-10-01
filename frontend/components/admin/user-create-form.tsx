@@ -7,6 +7,7 @@ import { SelectField } from "@/components/select-field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ApiError, createUser } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { getInstrumentMeta } from "@/lib/meta";
 import type { CreateUserRequest, InstrumentMeta } from "@/lib/types";
 
@@ -15,6 +16,11 @@ const ROLE_OPTIONS = [
   { value: "DISTRICT_ADMIN", label: "District Admin" },
   { value: "STATE_ADMIN", label: "State Admin" },
 ];
+
+// Spec 18 §4/D3: a STATE_ADMIN creator may only create these two roles, and only in their own
+// state — POST /api/users rejects (422) a role or state_code outside this, so the form locks
+// both rather than letting the server reject a value the UI itself offered.
+const STATE_ADMIN_ROLE_OPTIONS = ROLE_OPTIONS.filter((o) => o.value !== "STATE_ADMIN");
 
 function validate(body: CreateUserRequest): Record<string, string> {
   const errors: Record<string, string> = {};
@@ -33,9 +39,13 @@ function validate(body: CreateUserRequest): Record<string, string> {
 // the three roles POST /api/users already accepts (STATE_ADMIN/DISTRICT_ADMIN/LM_OFFICER — GATC
 // is provisioned outside this form, spec 17 D2).
 export function UserCreateForm({ onCreated }: { onCreated: () => void }) {
+  const { user: creator } = useAuth();
+  const isStateAdminCreator = creator?.role === "STATE_ADMIN";
   const [regions, setRegions] = useState<InstrumentMeta["regions"] | null>(null);
   const [role, setRole] = useState("LM_OFFICER");
-  const [stateCode, setStateCode] = useState("");
+  const [stateCode, setStateCode] = useState(
+    isStateAdminCreator ? (creator?.state_code ?? "") : "",
+  );
   const [districtCode, setDistrictCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -111,7 +121,7 @@ export function UserCreateForm({ onCreated }: { onCreated: () => void }) {
         name="role"
         label="Role"
         value={role}
-        options={ROLE_OPTIONS}
+        options={isStateAdminCreator ? STATE_ADMIN_ROLE_OPTIONS : ROLE_OPTIONS}
         onChange={handleRoleChange}
         error={fieldErrors.role}
       />
@@ -123,7 +133,7 @@ export function UserCreateForm({ onCreated }: { onCreated: () => void }) {
           options={(regions ?? []).map((r) => ({ value: r.state_code, label: r.state_name }))}
           onChange={handleStateChange}
           placeholder={regions ? "Select…" : "Loading…"}
-          disabled={!regions}
+          disabled={isStateAdminCreator || !regions}
           error={fieldErrors.state_code}
         />
         <SelectField

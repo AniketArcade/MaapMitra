@@ -13,12 +13,14 @@ from app.services import audit as audit_service
 
 router = APIRouter(tags=["audit"])
 
-SuperAdmin = Annotated[User, Depends(require_roles(Role.SUPER_ADMIN))]
+# Spec 18 §4: widened from SUPER_ADMIN-only — list_audit_logs() now applies its own D4
+# jurisdiction filter for a STATE_ADMIN actor (audit_logs has no jurisdiction column of its own).
+SuperOrStateAdmin = Annotated[User, Depends(require_roles(Role.SUPER_ADMIN, Role.STATE_ADMIN))]
 
 
 @router.get("/audit-logs")
 def list_audit_logs(
-    actor: SuperAdmin,
+    actor: SuperOrStateAdmin,
     db: DB,
     paging: Annotated[PageParams, Depends()],
     date_from: date | None = None,
@@ -29,6 +31,7 @@ def list_audit_logs(
 ) -> Page[AuditLogOut]:
     rows, total = audit_service.list_audit_logs(
         db,
+        actor,
         date_from=date_from,
         date_to=date_to,
         actor_user_id=actor_user_id,

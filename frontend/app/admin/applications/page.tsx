@@ -31,9 +31,13 @@ type State =
   | { kind: "ready"; data: Page<Application> };
 
 // Spec 17 §6.2: the same table the business/officer /applications page renders, cloned rather
-// than parameterized — this view is unconditionally unfiltered by jurisdiction (SUPER_ADMIN only)
-// and adds State/District columns + filters the original page has no use for.
+// than parameterized — this view is unconditionally unfiltered by jurisdiction (SUPER_ADMIN) and
+// adds State/District columns + filters the original page has no use for. Spec 18: a STATE_ADMIN
+// viewer gets the same page minus the (redundant, single-state) State column/filter — the backend
+// already scopes the list to their own state regardless.
 function AdminApplicationsList() {
+  const { user } = useAuth();
+  const isStateAdmin = user?.role === "STATE_ADMIN";
   const router = useRouter();
   const searchParams = useSearchParams();
   const [meta, setMeta] = useState<ApplicationMeta | null>(null);
@@ -57,7 +61,11 @@ function AdminApplicationsList() {
     [instrumentMeta],
   );
   const rawStateCode = searchParams.get("state_code");
-  const stateCode = rawStateCode && knownStates.has(rawStateCode) ? rawStateCode : "";
+  const stateCode = isStateAdmin
+    ? (user?.state_code ?? "")
+    : rawStateCode && knownStates.has(rawStateCode)
+      ? rawStateCode
+      : "";
   const districtsForState = useMemo(
     () => instrumentMeta?.regions.find((r) => r.state_code === stateCode)?.districts ?? [],
     [instrumentMeta, stateCode],
@@ -93,7 +101,7 @@ function AdminApplicationsList() {
     const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     if (debounced) params.set("q", debounced);
     if (status !== ALL) params.set("status", status);
-    if (stateCode) params.set("state_code", stateCode);
+    if (stateCode && !isStateAdmin) params.set("state_code", stateCode);
     if (districtCode) params.set("district_code", districtCode);
     api<Page<Application>>(`/applications?${params}`).then(
       (data) => !cancelled && setState({ kind: "ready", data }),
@@ -109,7 +117,7 @@ function AdminApplicationsList() {
     return () => {
       cancelled = true;
     };
-  }, [debounced, status, stateCode, districtCode, page]);
+  }, [debounced, status, stateCode, districtCode, page, isStateAdmin]);
 
   const data = state.kind === "ready" ? state.data : null;
   const lastPage = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
@@ -130,10 +138,14 @@ function AdminApplicationsList() {
     <div className="grid gap-6">
       <div>
         <h1 className="text-2xl font-semibold">Applications</h1>
-        <p className="text-sm text-muted-foreground">Every application, across every state.</p>
+        <p className="text-sm text-muted-foreground">
+          {isStateAdmin ? "Every application in your state." : "Every application, across every state."}
+        </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-[1fr_12rem_12rem_12rem]">
+      <div
+        className={`grid gap-3 ${isStateAdmin ? "sm:grid-cols-[1fr_12rem_12rem]" : "sm:grid-cols-[1fr_12rem_12rem_12rem]"}`}
+      >
         <Input
           type="search"
           placeholder="Search by application number, instrument UID or serial"
@@ -150,13 +162,15 @@ function AdminApplicationsList() {
           options={statusOptions}
           onChange={(v) => pushFilters({ status: v || ALL })}
         />
-        <SelectField
-          name="state_filter"
-          label="State"
-          value={stateCode}
-          options={stateOptions}
-          onChange={(v) => pushFilters({ state_code: v, district_code: "" })}
-        />
+        {isStateAdmin ? null : (
+          <SelectField
+            name="state_filter"
+            label="State"
+            value={stateCode}
+            options={stateOptions}
+            onChange={(v) => pushFilters({ state_code: v, district_code: "" })}
+          />
+        )}
         <SelectField
           name="district_filter"
           label="District"
@@ -185,7 +199,7 @@ function AdminApplicationsList() {
                 <TableHead>Instrument</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Business</TableHead>
-                <TableHead>State</TableHead>
+                {isStateAdmin ? null : <TableHead>State</TableHead>}
                 <TableHead>District</TableHead>
                 <TableHead>Submitted</TableHead>
               </TableRow>
@@ -208,7 +222,7 @@ function AdminApplicationsList() {
                   </TableCell>
                   <TableCell>{labelFor(meta?.application_types, a.application_type)}</TableCell>
                   <TableCell>{a.organization_name}</TableCell>
-                  <TableCell>{a.state_code}</TableCell>
+                  {isStateAdmin ? null : <TableCell>{a.state_code}</TableCell>}
                   <TableCell>{a.district_code}</TableCell>
                   <TableCell className="text-sm">
                     {a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : "—"}
@@ -254,7 +268,9 @@ function AdminApplicationsList() {
 
 export default function AdminApplicationsPage() {
   const { user } = useAuth();
-  if (!user || user.role !== "SUPER_ADMIN") return <StateMessage title={NO_ACCESS} />;
+  if (!user || !["SUPER_ADMIN", "STATE_ADMIN"].includes(user.role)) {
+    return <StateMessage title={NO_ACCESS} />;
+  }
   return (
     <Suspense>
       <AdminApplicationsList />

@@ -51,9 +51,13 @@ def test_require_roles_without_token_is_401(app) -> None:  # noqa: ANN001
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
-def test_create_user_only_super_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+def test_create_user_super_admin_and_state_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+    # _officer_payload()'s defaults (role=LM_OFFICER, state_code="JH") match a STATE_ADMIN actor's
+    # own state (make_user(STATE_ADMIN) also defaults to JH) — spec 18 admits them for exactly
+    # this in-state/lower-rank case. Spec 18's own cross-state/peer-rank rejections live in
+    # tests/test_users.py, not duplicated here.
     res = client.post("/api/users", json=_officer_payload(), headers=auth_header(make_user(role)))
-    if role == Role.SUPER_ADMIN:
+    if role in (Role.SUPER_ADMIN, Role.STATE_ADMIN):
         assert res.status_code == 201
         assert res.json()["role"] == "LM_OFFICER"
         assert res.json()["organization_id"] is None
@@ -119,34 +123,44 @@ def test_create_user_duplicate_email(client: TestClient, make_user) -> None:  # 
 # Spec 17: every new/extended endpoint is SUPER_ADMIN-only (except the harmless, unrestricted
 # state_code/district_code additions to GET /api/applications and the already-shared
 # GET /admin/state-overview, both covered by their own test files' own RBAC cases).
+# Spec 18 widens four of these to also admit STATE_ADMIN (narrower-scoped) — the in-state cases
+# here still only prove the router-level gate; cross-state/peer-rank rejections and GET
+# /admin/district-overview's own RBAC sweep live in tests/test_users.py,
+# tests/test_organizations.py, tests/test_audit_logs.py and tests/test_admin_district_overview.py.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
-def test_list_users_only_super_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+def test_list_users_super_admin_and_state_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
     res = client.get("/api/users", headers=auth_header(make_user(role)))
-    assert res.status_code == (200 if role == Role.SUPER_ADMIN else 403)
+    assert res.status_code == (200 if role in (Role.SUPER_ADMIN, Role.STATE_ADMIN) else 403)
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
-def test_patch_user_only_super_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+def test_patch_user_super_admin_and_state_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+    # target defaults to JH/DHN (make_user(LM_OFFICER)'s own default), matching a STATE_ADMIN
+    # actor's own state (also JH by default) — an in-state, lower-rank target.
     target = make_user(Role.LM_OFFICER)
     res = client.patch(
         f"/api/users/{target.id}", json={"is_active": False}, headers=auth_header(make_user(role))
     )
-    assert res.status_code == (200 if role == Role.SUPER_ADMIN else 403)
+    assert res.status_code == (200 if role in (Role.SUPER_ADMIN, Role.STATE_ADMIN) else 403)
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
-def test_list_audit_logs_only_super_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+def test_list_audit_logs_super_admin_and_state_admin(
+    client: TestClient, make_user, role: Role
+) -> None:  # noqa: ANN001
     res = client.get("/api/audit-logs", headers=auth_header(make_user(role)))
-    assert res.status_code == (200 if role == Role.SUPER_ADMIN else 403)
+    assert res.status_code == (200 if role in (Role.SUPER_ADMIN, Role.STATE_ADMIN) else 403)
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
-def test_list_gatc_directory_only_super_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+def test_list_gatc_directory_super_admin_and_state_admin(
+    client: TestClient, make_user, role: Role
+) -> None:  # noqa: ANN001
     res = client.get("/api/organizations?type=GATC", headers=auth_header(make_user(role)))
-    assert res.status_code == (200 if role == Role.SUPER_ADMIN else 403)
+    assert res.status_code == (200 if role in (Role.SUPER_ADMIN, Role.STATE_ADMIN) else 403)
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)

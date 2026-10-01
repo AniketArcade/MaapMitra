@@ -70,7 +70,8 @@ PostGIS · Leaflet maps · pgvector/RAG · OCR · Celery/Redis · native mobile 
 9. Public QR verify page ✅ (spec `docs/specs/09-public-verify.md`)
 10. Expiry dashboard + daily job ✅ (spec `docs/specs/10-expiry-job.md`)
 
-Finish the full flow end to end before any Good-to-Have (email polish, GPS, charts, GATC, OCR).
+Finish the full flow end to end before any Good-to-Have (email polish, GPS, charts, OCR). GATC
+was itself one of these Good-to-Haves; it's since been resolved (step 15, see Open decisions).
 
 ## Demo story (seed data must support it)
 

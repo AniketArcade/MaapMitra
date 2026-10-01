@@ -6,12 +6,14 @@ from sqlalchemy.orm import Session
 from app.core import clock
 from app.core.application_types import TERMINAL_STATUSES
 from app.core.config import get_settings
+from app.core.errors import NotFound, Unprocessable
 from app.core.regions import REGIONS
+from app.core.roles import Role
 from app.models.application import Application
 from app.models.certificate import Certificate, CertificateStatus
 from app.models.instrument import Instrument
 from app.models.user import User
-from app.schemas.admin import StateOverviewRow
+from app.schemas.admin import DistrictOverviewRow, StateOverviewRow
 from app.services.scoping import scope_applications, scope_certificates, scope_instruments
 
 S = CertificateStatus
@@ -101,4 +103,76 @@ def state_overview(db: Session, user: User) -> list[StateOverviewRow]:
             certs_expired=certs_expired.get(code, 0),
         )
         for code in REGIONS
+    ]
+
+
+def district_overview(
+    db: Session, user: User, *, state_code: str | None
+) -> list[DistrictOverviewRow]:
+    """Spec 18 §4: the district-level sibling of state_overview() — one row per district of a
+    single state, zero-filled. For STATE_ADMIN/DISTRICT_ADMIN, state_code is forced to
+    user.state_code regardless of what the client sent (this is read-only aggregate data already
+    scope-floored by scope_instruments/scope_applications/scope_certificates below — override,
+    not reject, unlike the user-identity endpoints' D3 rule). For SUPER_ADMIN, state_code is
+    required (422) and must be a real state (404), so they can drill into one state from the
+    existing state-wise table."""
+    effective_state = user.state_code if user.role != Role.SUPER_ADMIN else state_code
+    if not effective_state:
+        raise Unprocessable("state_code is required", field="state_code")
+    if effective_state not in REGIONS:
+        raise NotFound("Unknown state")
+
+    instrument_counts = dict(
+        db.execute(
+            scope_instruments(
+                select(Instrument.district_code, func.count())
+                .where(Instrument.state_code == effective_state)
+                .group_by(Instrument.district_code),
+                user,
+            )
+        ).all()
+    )
+    pending_counts = dict(
+        db.execute(
+            scope_applications(
+                select(Application.district_code, func.count())
+                .where(
+                    Application.state_code == effective_state,
+                    Application.status.notin_(TERMINAL_STATUSES),
+                )
+                .group_by(Application.district_code),
+                user,
+            )
+        ).all()
+    )
+    # scope_certificates() already joins Certificate -> Application internally — do not join it
+    # again here, or SQLAlchemy ends up with the same table joined twice (same warning as
+    # state_overview() above).
+    cert_rows = db.execute(
+        scope_certificates(
+            select(
+                Application.district_code,
+                func.count().filter(Certificate.status == S.VALID),
+                func.count().filter(Certificate.status == S.EXPIRED),
+            )
+            .select_from(Certificate)
+            .where(Application.state_code == effective_state)
+            .group_by(Application.district_code),
+            user,
+        )
+    ).all()
+    certs_valid = {code: valid for code, valid, _ in cert_rows}
+    certs_expired = {code: expired for code, _, expired in cert_rows}
+
+    return [
+        DistrictOverviewRow(
+            state_code=effective_state,
+            district_code=code,
+            district_name=name,
+            instrument_count=instrument_counts.get(code, 0),
+            pending_applications=pending_counts.get(code, 0),
+            certs_valid=certs_valid.get(code, 0),
+            certs_expired=certs_expired.get(code, 0),
+        )
+        for code, name in REGIONS[effective_state]["districts"].items()
     ]

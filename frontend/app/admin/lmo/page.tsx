@@ -28,8 +28,14 @@ type State =
   | { kind: "ready"; data: Page<AdminUser> };
 
 // Spec 17 §6.5: one row per LM Officer, reusing GET /api/users?role=LM_OFFICER (which is how
-// pending_cases/completed_cases get populated — see lib/types.ts's AdminUser comment).
+// pending_cases/completed_cases get populated — see lib/types.ts's AdminUser comment). Spec 18:
+// for a STATE_ADMIN viewer, GET /api/users rejects (422) a state_code that mismatches their own —
+// unlike organizations/applications, which just AND to an empty page — so the State filter is
+// hidden entirely here rather than left to fail. The backend already forces state_code to the
+// caller's own state when the param is omitted, so simply never sending it is correct.
 function LmoDirectoryList() {
+  const { user } = useAuth();
+  const isStateAdmin = user?.role === "STATE_ADMIN";
   const [instrumentMeta, setInstrumentMeta] = useState<InstrumentMeta | null>(null);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -60,7 +66,7 @@ function LmoDirectoryList() {
       page_size: String(PAGE_SIZE),
     });
     if (debounced) params.set("q", debounced);
-    if (stateCode) params.set("state_code", stateCode);
+    if (stateCode && !isStateAdmin) params.set("state_code", stateCode);
     if (districtCode) params.set("district_code", districtCode);
     if (isActive) params.set("is_active", isActive);
     getUsers(params).then(
@@ -77,7 +83,7 @@ function LmoDirectoryList() {
     return () => {
       cancelled = true;
     };
-  }, [debounced, stateCode, districtCode, isActive, page, refreshNonce]);
+  }, [debounced, stateCode, districtCode, isActive, page, refreshNonce, isStateAdmin]);
 
   async function toggle(userId: string, nextActive: boolean) {
     await patchUserActive(userId, nextActive);
@@ -86,8 +92,9 @@ function LmoDirectoryList() {
 
   const data = state.kind === "ready" ? state.data : null;
   const lastPage = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+  const effectiveStateCode = isStateAdmin ? (user?.state_code ?? "") : stateCode;
   const districtsForState =
-    instrumentMeta?.regions.find((r) => r.state_code === stateCode)?.districts ?? [];
+    instrumentMeta?.regions.find((r) => r.state_code === effectiveStateCode)?.districts ?? [];
   const stateOptions = [
     { value: "", label: "All states" },
     ...(instrumentMeta?.regions ?? []).map((r) => ({ value: r.state_code, label: r.state_name })),
@@ -104,7 +111,9 @@ function LmoDirectoryList() {
         <p className="text-sm text-muted-foreground">Legal Metrology Officers, nationwide.</p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-[1fr_10rem_10rem_8rem]">
+      <div
+        className={`grid gap-3 ${isStateAdmin ? "sm:grid-cols-[1fr_10rem_8rem]" : "sm:grid-cols-[1fr_10rem_10rem_8rem]"}`}
+      >
         <Input
           type="search"
           placeholder="Search by name or email"
@@ -114,17 +123,19 @@ function LmoDirectoryList() {
           className="h-10"
           aria-label="Search LM Officers"
         />
-        <SelectField
-          name="state_filter"
-          label="State"
-          value={stateCode}
-          options={stateOptions}
-          onChange={(v) => {
-            setStateCode(v);
-            setDistrictCode("");
-            setPage(1);
-          }}
-        />
+        {isStateAdmin ? null : (
+          <SelectField
+            name="state_filter"
+            label="State"
+            value={stateCode}
+            options={stateOptions}
+            onChange={(v) => {
+              setStateCode(v);
+              setDistrictCode("");
+              setPage(1);
+            }}
+          />
+        )}
         <SelectField
           name="district_filter"
           label="District"
@@ -134,7 +145,7 @@ function LmoDirectoryList() {
             setDistrictCode(v);
             setPage(1);
           }}
-          disabled={!stateCode}
+          disabled={!effectiveStateCode}
         />
         <SelectField
           name="active_filter"
@@ -165,7 +176,7 @@ function LmoDirectoryList() {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
-                <TableHead>State</TableHead>
+                {isStateAdmin ? null : <TableHead>State</TableHead>}
                 <TableHead>District</TableHead>
                 <TableHead>Pending</TableHead>
                 <TableHead>Completed</TableHead>
@@ -178,7 +189,7 @@ function LmoDirectoryList() {
                 <TableRow key={u.id}>
                   <TableCell>{u.full_name}</TableCell>
                   <TableCell className="text-sm">{u.email}</TableCell>
-                  <TableCell>{u.state_code}</TableCell>
+                  {isStateAdmin ? null : <TableCell>{u.state_code}</TableCell>}
                   <TableCell>{u.district_code}</TableCell>
                   <TableCell>{u.pending_cases ?? 0}</TableCell>
                   <TableCell>{u.completed_cases ?? 0}</TableCell>
@@ -235,6 +246,8 @@ function LmoDirectoryList() {
 
 export default function LmoDirectoryPage() {
   const { user } = useAuth();
-  if (!user || user.role !== "SUPER_ADMIN") return <StateMessage title={NO_ACCESS} />;
+  if (!user || !["SUPER_ADMIN", "STATE_ADMIN"].includes(user.role)) {
+    return <StateMessage title={NO_ACCESS} />;
+  }
   return <LmoDirectoryList />;
 }

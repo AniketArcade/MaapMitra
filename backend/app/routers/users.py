@@ -12,11 +12,15 @@ from app.services import users as users_service
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-SuperAdmin = Annotated[User, Depends(require_roles(Role.SUPER_ADMIN))]
+# Spec 18 §4: widened from SUPER_ADMIN-only. Unlike organizations, `users` has no scope_* floor
+# of its own, so list_users()/create_user()/set_active() each do their own actor-aware narrowing
+# for a STATE_ADMIN caller (see services/users.py) — the role Literal below still admits
+# "STATE_ADMIN"/"SUPER_ADMIN" because a SUPER_ADMIN caller still needs them.
+SuperOrStateAdmin = Annotated[User, Depends(require_roles(Role.SUPER_ADMIN, Role.STATE_ADMIN))]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_user(request: Request, body: UserCreate, actor: SuperAdmin, db: DB) -> UserOut:
+def create_user(request: Request, body: UserCreate, actor: SuperOrStateAdmin, db: DB) -> UserOut:
     user = users_service.create_user(db, actor, body, ip=get_client_ip(request))
     return UserOut.from_user(user)
 
@@ -24,7 +28,7 @@ def create_user(request: Request, body: UserCreate, actor: SuperAdmin, db: DB) -
 # Spec 17: official-account directory (never BUSINESS/GATC — see OFFICIAL_ROLES).
 @router.get("")
 def list_users(
-    actor: SuperAdmin,
+    actor: SuperOrStateAdmin,
     db: DB,
     paging: Annotated[PageParams, Depends()],
     role: Annotated[
@@ -37,6 +41,7 @@ def list_users(
 ) -> Page[UserListOut]:
     items, counts, total = users_service.list_users(
         db,
+        actor,
         role=Role(role) if role else None,
         state_code=state_code,
         district_code=district_code,
@@ -62,7 +67,7 @@ def list_users(
 
 @router.patch("/{user_id}")
 def patch_user(
-    request: Request, user_id: uuid.UUID, body: UserActivate, actor: SuperAdmin, db: DB
+    request: Request, user_id: uuid.UUID, body: UserActivate, actor: SuperOrStateAdmin, db: DB
 ) -> UserOut:
     user = users_service.set_active(db, actor, user_id, body.is_active, ip=get_client_ip(request))
     return UserOut.from_user(user)
