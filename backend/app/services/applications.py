@@ -223,6 +223,8 @@ def list_applications(
     q: str | None,
     status: ApplicationStatus | None,
     instrument_id: uuid.UUID | None,
+    state_code: str | None,
+    district_code: str | None,
     limit: int,
     offset: int,
     sort: str = "created_desc",
@@ -247,6 +249,10 @@ def list_applications(
         stmt = stmt.where(Application.status == status)
     if instrument_id:
         stmt = stmt.where(Application.instrument_id == instrument_id)
+    if state_code:
+        stmt = stmt.where(Application.state_code == state_code)
+    if district_code:
+        stmt = stmt.where(Application.district_code == district_code)
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     order = (

@@ -139,8 +139,7 @@ see below), `applications`, `documents`, `inspections`,
 `certificates`, `payments` (mocked, informational only — step 12, see below), `audit_logs`
 
 - `users`: DB check constraints tie `role` to `organization_id` (BUSINESS/GATC need one, officials must not) and require `state_code`/`district_code` for officials.
-- `organizations`: `gatc_eligible_category_ids` (step 15, migration `0013`, 🛑 not yet applied to
-  Supabase): nullable JSONB array of `instrument_categories.id` values, meaningful only for
+- `organizations`: `gatc_eligible_category_ids` (step 15, migration `0013`): nullable JSONB array of `instrument_categories.id` values, meaningful only for
   `type=GATC` orgs (CHECK-constrained). `none_as_null=True` on the SQLAlchemy type — without it a
   Python `None` writes as `'null'::jsonb`, not SQL `NULL`, which silently fails both the CHECK
   constraint and `services/gatc.py: list_eligible()`'s own `IS NULL` filtering (caught by a real
@@ -162,7 +161,8 @@ see below), `applications`, `documents`, `inspections`,
     instrument's live value from drifting out of sync with an in-progress application's frozen
     snapshot.
   - `category_id` / `category_values` (spec `docs/specs/16-instrument-categories.md`, migration
-    `0012`, 🛑 not yet applied to Supabase, content pending user review): an additive, optional,
+    `0012`, applied to Supabase, content review of the 33 seeded category rows still pending):
+    an additive, optional,
     richer category system that sits **alongside** `instrument_type`/`capacity`/`capacity_unit`/
     `accuracy_class` above, not instead of them — every pre-existing instrument keeps
     `category_id = NULL` and works entirely unaffected. `category_id` (nullable smallint FK ->
@@ -192,7 +192,7 @@ see below), `applications`, `documents`, `inspections`,
   - **Officials never see DRAFT applications or their documents** (`scope_applications`).
   - `scheduled_date` on `ApplicationOut`/`ApplicationDetail.inspection` comes from a LEFT JOIN/`contains_eager` on `inspections`, never a per-row query.
 - `documents`: `storage_path` = `applications/{application_id}/{document_id}.{pdf|jpg|png}` (never a URL, never the user's filename). `content_type` is the **sniffed** type. Max 10 per application.
-- `inspections` (spec `docs/specs/05-officer-dashboard.md`, extended by `docs/specs/06-inspection-checklist.md` and `docs/specs/15-gatc-eligibility.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign in step 5 — always the officer who scheduled it — **or**, since step 15, a specific `GATC`-role user the scheduling officer explicitly routed to; either way the only person who may start/edit/submit the field inspection, step 6 D1/step 15). `assignee_role` (step 15, migration `0013`, 🛑 not yet applied to Supabase): `inspection_assignee_role` enum (`LM_OFFICER`/`GATC`), `NOT NULL`, backfilled `LM_OFFICER` for every pre-existing row (a known fact, not a guess — see the spec's D4) — denormalized so reporting/dashboards never need a join to `users.role`; set once at assignment and never re-validated (safe: no endpoint anywhere ever mutates `users.role` after creation). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` doubles as the "my inspections" list: `GET /applications?status=INSPECTION&sort=scheduled_asc`. Step 6 adds `overall_remarks` (text, null), `submitted_at` (timestamptz, null — the single source of truth for "this checklist is locked"), `submitted_by` (FK → users, `ON DELETE RESTRICT`, null).
+- `inspections` (spec `docs/specs/05-officer-dashboard.md`, extended by `docs/specs/06-inspection-checklist.md` and `docs/specs/15-gatc-eligibility.md`): one row per application (`application_id` unique FK), created when `DOCUMENT_REVIEW → SCHEDULED` fires. `scheduled_date` (date only, no time slot — ASSUMPTION), `assigned_officer_id` (self-assign in step 5 — always the officer who scheduled it — **or**, since step 15, a specific `GATC`-role user the scheduling officer explicitly routed to; either way the only person who may start/edit/submit the field inspection, step 6 D1/step 15). `assignee_role` (step 15, migration `0013`): `inspection_assignee_role` enum (`LM_OFFICER`/`GATC`), `NOT NULL`, backfilled `LM_OFFICER` for every pre-existing row (a known fact, not a guess — see the spec's D4) — denormalized so reporting/dashboards never need a join to `users.role`; set once at assignment and never re-validated (safe: no endpoint anywhere ever mutates `users.role` after creation). No `status` column — the application's own `status` stays the single source of truth. Index `(assigned_officer_id, scheduled_date)` doubles as the "my inspections" list: `GET /applications?status=INSPECTION&sort=scheduled_asc`. Step 6 adds `overall_remarks` (text, null), `submitted_at` (timestamptz, null — the single source of truth for "this checklist is locked"), `submitted_by` (FK → users, `ON DELETE RESTRICT`, null).
 - `inspection_checklist_items` / `inspection_measurements` (spec `docs/specs/06-inspection-checklist.md`): one row per `CHECKLIST_TEMPLATES`/`MEASUREMENT_TEMPLATES` entry for the instrument's type (`core/inspection_templates.py`, ASSUMPTION — illustrative demo content), **snapshotted** when the inspection starts (`SCHEDULED → INSPECTION`) so a later template edit never changes an in-progress or already-submitted inspection. `inspection_checklist_items.result` is a nullable `checklist_result` enum (`PASS`/`FAIL`/`NA`); `inspection_measurements.expected_value` is `instrument.capacity * fraction` computed at start time, `observed_value` filled by the officer. Both `ON DELETE CASCADE` from `inspections`, unique on `(inspection_id, item_key)` / `(inspection_id, label)`.
 - `document_review_checklist_items` (spec `docs/specs/11-document-review-checklist.md`,
   migration `0008`): one row per `DOCUMENT_REVIEW_CHECKLIST_TEMPLATE` entry (`core/document_review_templates.py`,
@@ -362,9 +362,10 @@ Certificate status: `VALID` · `EXPIRED` · `REVOKED` · `SUPERSEDED` (step 13)
 
 ### Instrument categories (step 16, spec `docs/specs/16-instrument-categories.md`)
 
-🛑 **Migration `0012` is NOT applied to Supabase and must not be until a human reviews the
-seeded category content** (names, fields, options, units) — see the migration table above and the
-spec doc for the full disclaimer. This is content review, not just code review.
+🛑 **Migration `0012` is applied to Supabase, but its seeded category content (names, fields,
+options, units) has never been human-reviewed** — see the migration table above and the spec doc
+for the full disclaimer. This is content review, not code review, and it's still open: the 33
+rows are live in the real database today, unreviewed.
 
 - `instrument_categories` (new table): 33 rows, `id` a **smallint primary key 1-33** (not the
   usual `UUIDPk` — a small, fixed, numbered reference set, mirrored from a separate prototype
@@ -409,7 +410,7 @@ spec doc for the full disclaimer. This is content review, not just code review.
 
 ### GATC eligibility + allocation (step 15, spec `docs/specs/15-gatc-eligibility.md`)
 
-🛑 **Migration `0013` is NOT applied to Supabase.** Resolves the root `CLAUDE.md`'s "GATC workflow
+Migration `0013` is applied to Supabase. Resolves the root `CLAUDE.md`'s "GATC workflow
 depth: minimal" open decision as **minimal but real**: a `GATC`-role user becomes a genuine,
 category-gated `assigned_officer_id` on an `Inspection`, then flows through the exact same
 inspection/checklist/measurement/approve-reject machinery `LM_OFFICER` already uses — nothing is
@@ -574,6 +575,13 @@ PATCH /api/applications/{id}/review-checklist   # LM_OFFICER only, DOCUMENT_REVI
 DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/INSPECTION evidence (step 6)
 GET   /api/gatc/eligible          # LM_OFFICER only; ?category_id=<id>, jurisdiction-scoped GATC orgs (step 15)
 GET   /api/gatc/{organization_id}/users   # LM_OFFICER only; active GATC-role users of one org (step 15)
+GET   /api/users                  # SUPER_ADMIN only; official accounts (role in OFFICIAL_ROLES), filters role/state_code/district_code/is_active/q; ?role=LM_OFFICER populates pending_cases/completed_cases per officer (step 17)
+PATCH /api/users/{id}             # SUPER_ADMIN only; body {is_active} only; 409 on self-deactivation (step 17)
+GET   /api/audit-logs             # SUPER_ADMIN only; filters date_from/date_to/actor_user_id/action/entity_type; actor_name null = system actor (step 17)
+GET   /api/organizations?type=GATC   # SUPER_ADMIN only; GATC directory with live pending/completed case counts per org (step 17)
+GET   /api/applications?state_code=&district_code=   # additive filters on the existing list, any role (no-op for jurisdiction-locked callers) (step 17)
+GET   /admin/state-overview       # ADMIN_ROLES; one row per REGIONS state/UT, zero-filled, never paginated (step 17)
+GET   /api/certificates           # same Reader/scope_certificates as every other certificate endpoint; ?status= filter; first certificate list endpoint (step 17)
 ```
 
 ### Public verify (step 9, spec `docs/specs/09-public-verify.md`; field list extended by step 13, spec `docs/specs/13-certificate-superseding.md`)
@@ -647,6 +655,81 @@ GET   /api/gatc/{organization_id}/users   # LM_OFFICER only; active GATC-role us
   disjoint bucket): every expiring-soon certificate is still counted as valid.
 - `AdminCertificateStats.superseded` (step 13): a `SUPERSEDED`-status count bucket, alongside
   `valid`/`expired`/`revoked`, from the same grouped-by-status query.
+
+### Super Admin (step 17, spec `docs/specs/17-super-admin.md`)
+
+Resolves root `CLAUDE.md`'s "Admin: stats, users, audit logs" role-table line into a real page.
+`SUPER_ADMIN`-only for Phase 1 (D1) — the data layer (every `scope_*` helper used below already
+has a `SUPER_ADMIN` branch returning the statement unfiltered) would generalize to
+`STATE_ADMIN`/`DISTRICT_ADMIN` for free later, but no frontend page does that yet. No new tables
+or columns anywhere in this step — every endpoint is a new route/query over data that already
+existed.
+
+- **`OFFICIAL_ROLES`** (`core/roles.py`): `ADMIN_ROLES | {LM_OFFICER}` — the role set
+  `GET /api/users` lists. `BUSINESS` (self-registers) and `GATC` (listed via the GATC directory
+  instead, below) are deliberately excluded (D2).
+- **`GET /api/users`** (`services/users.py: list_users()`): no `scope_*` call — `users` has no
+  per-row ownership concept the way `applications`/`instruments` do, and this endpoint is already
+  `SUPER_ADMIN`-only. `role=LM_OFFICER` triggers a second query (`Inspection.assigned_officer_id`
+  joined to `Application`) that buckets each officer's cases by the same `TERMINAL_STATUSES` split
+  described below, populating `UserListOut.pending_cases`/`completed_cases`; every other role
+  filter leaves those two fields `null` (not `0` — `null` means "not requested"). Only run for the
+  officers on the current page, never the whole table.
+- **`PATCH /api/users/{id}`** (`services/users.py: set_active()`): body is exactly
+  `{is_active: bool}` (`UserActivate`, `StrictModel`, D5). Refuses `user.id == actor.id and not
+  is_active` with 409 "Cannot deactivate your own account" — a safety guard beyond the spec's
+  literal text, added so a lone Super Admin can't lock themselves out with nobody left to
+  re-enable the account. Writes `USER_STATUS_CHANGED` (`entity_type="user"`,
+  `details={is_active, role}`).
+- **Pending vs completed, the one shared definition reused everywhere a case count is needed**
+  (the LMO directory above, the GATC directory and `GET /admin/state-overview` below):
+  `completed = status in TERMINAL_STATUSES` (`REJECTED`, `CERTIFICATE_ISSUED`), `pending` =
+  everything else reachable through an `Inspection` join (`SCHEDULED`/`INSPECTION`/`APPROVED`) —
+  reuses the codebase's own existing terminal/non-terminal boundary rather than inventing a second
+  one.
+- **`GET /api/organizations?type=GATC`** (new router `routers/organizations.py`,
+  `services/organizations.py: gatc_directory()`): `type` is a required `Literal["GATC"]` — the
+  only directory this step builds (D3; `GET /api/gatc/eligible` stays the scheduling officer's
+  own category-filtered allocation dropdown, untouched). Uses `scope_organizations()` even though
+  `SUPER_ADMIN`'s own branch is a no-op today — future-proofed at zero cost. `eligible_categories`
+  resolves `Organization.gatc_eligible_category_ids` against `instrument_categories` in one `IN`
+  query over the page's id union, never per-row. `GatcDirectoryOut.active` is a **roll-up**
+  (`True` iff the org has >=1 active `GATC`-role user) — `Organization` has no `is_active` column
+  of its own, so Activate/Deactivate from this directory always targets a specific person
+  (`GatcDirectoryUserOut.id`) via the same `PATCH /api/users/{id}`, never the org.
+- **`GET /api/audit-logs`** (new router `routers/audit.py`, `services/audit.py: list_audit_logs()`
+  alongside the existing `log()` writer): no `scope_*` — `audit_logs` has no jurisdiction column,
+  by design a cross-cutting system table. `actor_name` comes from an outer join to `users`; `null`
+  means a system actor (`actor_user_id IS NULL`, e.g. the expiry job), not an unknown user.
+  `date_to` is inclusive of the whole day (`< date_to + 1 day`, since `created_at` is a
+  timestamptz but `date_to` is a bare date).
+- **`GET /admin/state-overview`** (`services/admin.py: state_overview()`): one row per `REGIONS`
+  key (~36, always present, zero-filled), three `GROUP BY` queries
+  (`scope_instruments`/`scope_applications`/`scope_certificates`) merged in Python — the Phase 1
+  substitute for the brief's India map (root `CLAUDE.md`'s Deferred list names Leaflet maps
+  explicitly). Reuses the existing `Admin = require_roles(*ADMIN_ROLES)` dependency on
+  `routers/admin.py` (matching that router's own convention) rather than a `SUPER_ADMIN`-only one
+  — the frontend still only renders this for `SUPER_ADMIN`. Returns a bare `list[...]`, never
+  `Page[...]`: bounded to `len(REGIONS)` rows always, so pagination would be decoration. **Do not**
+  add a second `.join(Application, ...)` when building the certificate-count query here —
+  `scope_certificates()` already joins `Certificate -> Application` internally; a duplicate join
+  on top of it is a real bug this step hit once during implementation.
+- **`GET /api/applications?state_code=&district_code=`**: additive filters, no role restriction —
+  harmless no-op for a jurisdiction-locked caller (their own scope already excludes everything
+  outside their jurisdiction; a mismatched filter on top just returns an empty page, never
+  403/404). `Application` already carries its own `state_code`/`district_code` snapshot columns,
+  index-backed by the existing `ix_applications_region_status` composite index.
+- **`GET /api/certificates`** (`services/certificates.py: list_certificates()`,
+  `routers/certificates.py`): no certificate list endpoint existed before this step (only
+  get-by-id and `.../pdf`). Reuses the router's existing `Reader` role set and `scope_certificates`
+  unchanged — not `SUPER_ADMIN`-only, since every other certificate endpoint already admits
+  `BUSINESS`/`LM_OFFICER`/`*_ADMIN` and there's no reason this one should be narrower. Declared
+  before `GET /{certificate_id}` in the router file for readability (no actual path collision risk
+  between a bare `""` and a dynamic `/{id}` segment, unlike `/meta`-vs-`/{id}` elsewhere).
+- Out of scope, recorded in the spec's §9, not built here: an enforcement/violations module (no
+  data model, no named legal source), an India map, a CSV/PDF export engine, trend charts, a
+  dynamic state/district editor (`REGIONS` stays a code constant), editing a user's
+  email/role/jurisdiction after creation, and extending this page to `STATE_ADMIN`/`DISTRICT_ADMIN`.
 
 ## Auth and RBAC (spec: `docs/specs/01-login-rbac.md`)
 

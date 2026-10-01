@@ -21,3 +21,16 @@ class AdminCertificateStats(BaseModel):
             revoked=by_status.get(CertificateStatus.REVOKED, 0),
             superseded=by_status.get(CertificateStatus.SUPERSEDED, 0),
         )
+
+
+class StateOverviewRow(BaseModel):
+    """Spec 17 §6.4: one row per REGIONS state/UT (~36), always present and zero-filled when a
+    state has no data yet — the Phase 1 substitute for the brief's India map (root CLAUDE.md's
+    Deferred list names Leaflet maps explicitly)."""
+
+    state_code: str
+    state_name: str
+    instrument_count: int
+    pending_applications: int
+    certs_valid: int
+    certs_expired: int

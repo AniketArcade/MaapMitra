@@ -44,6 +44,28 @@ class UserOut(BaseModel):
         )
 
 
+class UserListOut(UserOut):
+    """Spec 17: GET /api/users listing shape. pending_cases/completed_cases populate only when
+    the caller filters role=LM_OFFICER (the LMO directory reuses this same list) — null for every
+    other role so the generic Users table never pays for the extra Inspection/Application join."""
+
+    pending_cases: int | None = None
+    completed_cases: int | None = None
+
+    @classmethod
+    def from_user_with_counts(
+        cls, user: User, *, pending: int | None, completed: int | None
+    ) -> Self:
+        base = UserOut.from_user(user)
+        return cls(**base.model_dump(), pending_cases=pending, completed_cases=completed)
+
+
+class UserActivate(StrictModel):
+    """Spec 17 D5: PATCH /api/users/{id} writes exactly this field, nothing else."""
+
+    is_active: bool
+
+
 class UserCreate(StrictModel):
     """Official accounts only. BUSINESS uses /auth/register; GATC is deferred."""
 

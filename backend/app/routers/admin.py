@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from app.core.deps import DB, require_roles
 from app.core.roles import ADMIN_ROLES
 from app.models.user import User
-from app.schemas.admin import AdminCertificateStats
+from app.schemas.admin import AdminCertificateStats, StateOverviewRow
 from app.schemas.certificate import CertificateOut
 from app.schemas.common import Page, PageParams
 from app.services import admin as service
@@ -32,3 +32,10 @@ def list_expiring_soon(
         page=paging.page,
         page_size=paging.page_size,
     )
+
+
+# Spec 17 §6.4: Super Admin dashboard's state-wise table (the Phase 1 substitute for a map).
+# Bounded to len(REGIONS) rows (~36) always — never paginated, that would be decoration.
+@router.get("/state-overview")
+def get_state_overview(user: Admin, db: DB) -> list[StateOverviewRow]:
+    return service.state_overview(db, user)

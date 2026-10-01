@@ -3,7 +3,20 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
-import { FileText, Gauge, LayoutDashboard, LogOut, ShieldCheck, User } from "lucide-react";
+import {
+  Award,
+  Building2,
+  Clock3,
+  FileText,
+  Gauge,
+  LayoutDashboard,
+  LogOut,
+  ScrollText,
+  ShieldCheck,
+  User,
+  UserCog,
+  Users,
+} from "lucide-react";
 
 import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
@@ -29,6 +42,21 @@ const NAV = [
   { href: "/profile", label: "Profile", icon: User },
 ];
 
+// Spec 17 §6.8: SUPER_ADMIN gets a fuller flat sidebar instead of the single "Admin" link
+// STATE_ADMIN/DISTRICT_ADMIN keep (spec 17 D1 — this page is SUPER_ADMIN-only for now).
+const SUPER_ADMIN_NAV = [
+  { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/admin/applications", label: "Applications", icon: FileText },
+  { href: "/instruments", label: "Instruments", icon: Gauge },
+  { href: "/admin/certificates", label: "Certificates", icon: Award },
+  { href: "/admin/certificates/expiring-soon", label: "Expiring soon", icon: Clock3 },
+  { href: "/admin/gatc", label: "GATC directory", icon: Building2 },
+  { href: "/admin/lmo", label: "LMO directory", icon: UserCog },
+  { href: "/admin/users", label: "Users", icon: Users },
+  { href: "/admin/audit-logs", label: "Audit logs", icon: ScrollText },
+  { href: "/profile", label: "Profile", icon: User },
+];
+
 // UX guard only. The backend enforces every permission.
 export function AppShell({ children }: { children: ReactNode }) {
   const { user, status, logout } = useAuth();
@@ -48,8 +76,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   // UX guard only. The backend enforces every permission.
-  const isAdmin = ADMIN_ROLES.includes(user.role);
-  const navItems = isAdmin ? [...NAV, { href: "/admin", label: "Admin", icon: ShieldCheck }] : NAV;
+  const navItems =
+    user.role === "SUPER_ADMIN"
+      ? SUPER_ADMIN_NAV
+      : ADMIN_ROLES.includes(user.role)
+        ? [...NAV, { href: "/admin", label: "Admin", icon: ShieldCheck }]
+        : NAV;
 
   return (
     <SidebarProvider>
@@ -63,7 +95,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <SidebarMenu>
             {navItems.map((item) => {
               const Icon = item.icon;
-              const isActive = pathname.startsWith(item.href);
+              // "/admin" (Dashboard) would otherwise prefix-match every /admin/* sub-route too.
+              const isActive =
+                item.href === "/admin" ? pathname === "/admin" : pathname.startsWith(item.href);
               return (
                 <SidebarMenuItem key={item.href}>
                   <SidebarMenuButton isActive={isActive} render={<Link href={item.href} />}>

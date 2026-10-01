@@ -355,3 +355,71 @@ export type InspectionMeta = {
   measurement_labels: Record<string, string[]>;
   max_evidence_photos: number;
 };
+
+// Spec 17: Super Admin page. Mirrors backend/app/schemas/user.py's UserListOut — pending_cases/
+// completed_cases are populated only when GET /users is called with ?role=LM_OFFICER (the LMO
+// directory); null otherwise, never 0 (0 means "no cases," null means "not requested").
+export type AdminUser = User & {
+  pending_cases: number | null;
+  completed_cases: number | null;
+};
+
+// Mirrors backend/app/schemas/audit.py's AuditLogOut. actor_name is null for a system actor
+// (e.g. the expiry job) — render "System", not a blank.
+export type AuditLogEntry = {
+  id: string;
+  actor_user_id: string | null;
+  actor_name: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  organization_id: string | null;
+  details: Record<string, unknown>;
+  ip_address: string | null;
+  created_at: string;
+};
+
+// Mirrors backend/app/schemas/organization.py's GatcDirectoryUserOut/GatcDirectoryOut.
+export type GatcDirectoryUser = {
+  id: string;
+  full_name: string;
+  email: string;
+  is_active: boolean;
+};
+
+export type GatcDirectoryEntry = {
+  id: string;
+  name: string;
+  state_code: string;
+  district_code: string;
+  eligible_categories: string[];
+  pending_cases: number;
+  completed_cases: number;
+  // True iff >=1 active GATC-role user belongs to this org — a roll-up, not a real column
+  // (Organization has no is_active of its own). Activate/Deactivate always targets a specific
+  // user in `users`, never this org-level field directly.
+  active: boolean;
+  users: GatcDirectoryUser[];
+};
+
+// Mirrors backend/app/schemas/admin.py's StateOverviewRow.
+export type StateOverviewRow = {
+  state_code: string;
+  state_name: string;
+  instrument_count: number;
+  pending_applications: number;
+  certs_valid: number;
+  certs_expired: number;
+};
+
+// Mirrors backend/app/schemas/user.py's UserCreate (officials only — BUSINESS self-registers,
+// GATC is provisioned outside this form, see spec 17 D2).
+export type CreateUserRequest = {
+  email: string;
+  full_name: string;
+  phone?: string;
+  role: "STATE_ADMIN" | "DISTRICT_ADMIN" | "LM_OFFICER";
+  password: string;
+  state_code: string;
+  district_code?: string;
+};

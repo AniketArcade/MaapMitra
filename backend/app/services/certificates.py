@@ -3,7 +3,7 @@ import logging
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import clock
@@ -212,6 +212,23 @@ def issue(db: Session, user: User, application_id: uuid.UUID, *, ip: str) -> App
         applications_service.delete_objects_best_effort([pdf_path])  # accepted: rare orphans
         raise
     return locked
+
+
+def list_certificates(
+    db: Session, user: User, *, status: CertificateStatus | None, limit: int, offset: int
+) -> tuple[list[Certificate], int]:
+    """Spec 17 §6.3/§1.6: no list endpoint existed before this (only get-by-id/pdf) — the Super
+    Admin certificates page needs one. Mirrors expiring_soon()'s shape minus the valid+horizon
+    filter; scope_certificates() gives every other role (BUSINESS/LM_OFFICER/*_ADMIN) correct
+    org/jurisdiction scoping for free, same as every other reader of this router."""
+    stmt = scope_certificates(select(Certificate), user)
+    if status:
+        stmt = stmt.where(Certificate.status == status)
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    items = list(
+        db.scalars(stmt.order_by(Certificate.created_at.desc()).limit(limit).offset(offset))
+    )
+    return items, total
 
 
 def get(db: Session, user: User, certificate_id: uuid.UUID) -> Certificate:

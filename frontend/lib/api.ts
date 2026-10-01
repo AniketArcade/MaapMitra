@@ -1,12 +1,19 @@
 // Single typed API client. Client-side only: it calls the same-origin /api/* rewrite.
 import type {
   AdminCertificateStats,
+  AdminUser,
   ApplicationStats,
+  AuditLogEntry,
   AuthResponse,
   Certificate,
+  CreateUserRequest,
+  GatcDirectoryEntry,
   GatcEligibleOrg,
   GatcOrgUser,
   InspectionDetail,
+  Page,
+  StateOverviewRow,
+  User,
   VerifyResult,
 } from "@/lib/types";
 
@@ -175,4 +182,37 @@ export function getGatcEligible(categoryId: number): Promise<GatcEligibleOrg[]> 
 
 export function getGatcOrgUsers(organizationId: string): Promise<GatcOrgUser[]> {
   return api<GatcOrgUser[]>(`/gatc/${organizationId}/users`);
+}
+
+// Spec 17: Super Admin page.
+
+export function getUsers(params: URLSearchParams): Promise<Page<AdminUser>> {
+  return api<Page<AdminUser>>(`/users?${params}`);
+}
+
+export function patchUserActive(id: string, is_active: boolean): Promise<User> {
+  return api<User>(`/users/${id}`, { method: "PATCH", body: JSON.stringify({ is_active }) });
+}
+
+export function createUser(body: CreateUserRequest): Promise<User> {
+  return api<User>("/users", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function getAuditLogs(params: URLSearchParams): Promise<Page<AuditLogEntry>> {
+  return api<Page<AuditLogEntry>>(`/audit-logs?${params}`);
+}
+
+export function getGatcDirectory(params: URLSearchParams): Promise<Page<GatcDirectoryEntry>> {
+  const query = new URLSearchParams(params);
+  query.set("type", "GATC");
+  return api<Page<GatcDirectoryEntry>>(`/organizations?${query}`);
+}
+
+// Not cached (like getApplicationStats above): the Super Admin dashboard refetches on retry/focus.
+export function getStateOverview(): Promise<StateOverviewRow[]> {
+  return api<StateOverviewRow[]>("/admin/state-overview");
+}
+
+export function getCertificates(params: URLSearchParams): Promise<Page<Certificate>> {
+  return api<Page<Certificate>>(`/certificates?${params}`);
 }

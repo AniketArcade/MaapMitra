@@ -183,3 +183,52 @@ def test_get_certificate_and_pdf_scope(client: TestClient, make_user, make_appli
         ).status_code
         == 404
     )
+
+
+# ---------------------------------------------------------------------------
+# Spec 17 §1.6: GET /api/certificates (list) — no list endpoint existed before this step.
+# RBAC (GATC excluded, every other reader admitted) is covered by test_rbac.py.
+# ---------------------------------------------------------------------------
+
+
+def test_list_certificates_pagination_and_scoping(
+    client: TestClient, make_user, make_application
+) -> None:  # noqa: ANN001
+    owner = make_user(Role.BUSINESS)
+    officer = make_user(Role.LM_OFFICER)
+    admin = make_user(Role.SUPER_ADMIN)
+    app1 = make_application(owner, status="APPROVED", officer=officer)
+    app2 = make_application(owner, status="APPROVED", officer=officer)
+    cert1 = _issue(client, officer, app1.id).json()["certificate"]
+    cert2 = _issue(client, officer, app2.id).json()["certificate"]
+
+    res = client.get("/api/certificates", headers=auth_header(admin))
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["total"] == 2
+    numbers = {c["certificate_number"] for c in body["items"]}
+    assert numbers == {cert1["certificate_number"], cert2["certificate_number"]}
+
+    # Owner sees their own certificates too (scope_certificates -> scope_applications -> org).
+    owner_res = client.get("/api/certificates", headers=auth_header(owner))
+    assert owner_res.json()["total"] == 2
+
+    other_business = make_user(Role.BUSINESS)
+    assert client.get("/api/certificates", headers=auth_header(other_business)).json()["total"] == 0
+
+    paged = client.get("/api/certificates?page_size=1", headers=auth_header(admin)).json()
+    assert len(paged["items"]) == 1 and paged["total"] == 2
+
+
+def test_list_certificates_status_filter(client: TestClient, make_user, make_application) -> None:  # noqa: ANN001
+    owner = make_user(Role.BUSINESS)
+    officer = make_user(Role.LM_OFFICER)
+    admin = make_user(Role.SUPER_ADMIN)
+    app = make_application(owner, status="APPROVED", officer=officer)
+    _issue(client, officer, app.id)
+
+    valid = client.get("/api/certificates?status=VALID", headers=auth_header(admin)).json()
+    assert valid["total"] == 1
+
+    revoked = client.get("/api/certificates?status=REVOKED", headers=auth_header(admin)).json()
+    assert revoked["total"] == 0

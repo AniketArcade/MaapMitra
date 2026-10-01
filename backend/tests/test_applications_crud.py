@@ -170,3 +170,46 @@ def test_list_search_filter_and_paging(
     assert len(ids) == 4 and len(set(ids)) == 4
     assert client.get("/api/applications?page_size=101", headers=headers).status_code == 422
     assert client.get("/api/applications?status=NOPE", headers=headers).status_code == 422
+
+
+# Spec 17 §1.4: state_code/district_code filters, additive to the list above.
+def test_list_state_district_filters(
+    client: TestClient, make_user, make_instrument, make_application
+) -> None:  # noqa: ANN001
+    admin = make_user(Role.SUPER_ADMIN)
+    owner_dhn = make_user(Role.BUSINESS)  # JH/DHN
+    owner_rnc = make_user(Role.BUSINESS, org_state="JH", org_district="RNC")
+    # SUBMITTED, not DRAFT: scope_applications hides DRAFT rows from every non-BUSINESS caller,
+    # including SUPER_ADMIN.
+    make_application(owner_dhn, make_instrument(owner_dhn), status="SUBMITTED")
+    make_application(owner_rnc, make_instrument(owner_rnc, district_code="RNC"), status="SUBMITTED")
+
+    res = client.get(
+        "/api/applications?state_code=JH&district_code=RNC", headers=auth_header(admin)
+    )
+    assert res.json()["total"] == 1
+
+    res = client.get("/api/applications?state_code=JH", headers=auth_header(admin))
+    assert res.json()["total"] == 2
+
+
+def test_state_district_filters_are_harmless_noop_for_jurisdiction_locked_callers(
+    client: TestClient, make_user, make_instrument, make_application
+) -> None:  # noqa: ANN001
+    officer = make_user(Role.LM_OFFICER)  # JH/DHN
+    owner = make_user(Role.BUSINESS)
+    make_application(owner, make_instrument(owner), status="SUBMITTED")
+
+    matching = client.get(
+        "/api/applications?state_code=JH&district_code=DHN", headers=auth_header(officer)
+    )
+    assert matching.status_code == 200
+    assert matching.json()["total"] == 1
+
+    # An officer's own scope already excludes everything outside JH/DHN; a mismatched filter
+    # on top of that scope is an empty page, never a 403/404.
+    mismatched = client.get(
+        "/api/applications?state_code=KA&district_code=BU", headers=auth_header(officer)
+    )
+    assert mismatched.status_code == 200
+    assert mismatched.json()["total"] == 0
