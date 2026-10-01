@@ -2,7 +2,7 @@ import uuid
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.roles import Role
@@ -59,11 +59,27 @@ def list_audit_logs(
     users.organization_id -> organizations.state_code. Because both joins are outer joins, a
     system-actor row (actor_user_id IS NULL) has NULL on both sides and is excluded by the same
     WHERE with no extra IS NOT NULL needed — a disclosed Phase-1 gap (system rows are invisible to
-    a STATE_ADMIN), not a silent one."""
+    a STATE_ADMIN), not a silent one.
+
+    Spec 21 §4: a DISTRICT_ADMIN actor's floor reuses the identical two joins, ANDing
+    district_code onto each side of the OR instead of checking state alone — strict district
+    isolation, same disclosed system-actor gap, now also excluding other districts in-state."""
     stmt = select(AuditLog, User.full_name).outerjoin(User, AuditLog.actor_user_id == User.id)
     if actor.role == Role.STATE_ADMIN:
         stmt = stmt.outerjoin(Organization, User.organization_id == Organization.id).where(
             or_(User.state_code == actor.state_code, Organization.state_code == actor.state_code)
+        )
+    elif actor.role == Role.DISTRICT_ADMIN:
+        stmt = stmt.outerjoin(Organization, User.organization_id == Organization.id).where(
+            or_(
+                and_(
+                    User.state_code == actor.state_code, User.district_code == actor.district_code
+                ),
+                and_(
+                    Organization.state_code == actor.state_code,
+                    Organization.district_code == actor.district_code,
+                ),
+            )
         )
     if date_from:
         stmt = stmt.where(AuditLog.created_at >= date_from)

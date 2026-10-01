@@ -43,6 +43,12 @@ const STATE_ADMIN_ROLE_OPTIONS = [
   { value: "DISTRICT_ADMIN", label: "District Admin" },
   { value: "LM_OFFICER", label: "LM Officer" },
 ];
+// Spec 21 §4: a DISTRICT_ADMIN viewer may only see LM_OFFICER — the sole OFFICIAL_ROLES rank
+// strictly below it.
+const DISTRICT_ADMIN_ROLE_OPTIONS = [
+  { value: ALL, label: "All roles" },
+  { value: "LM_OFFICER", label: "LM Officer" },
+];
 
 type State =
   | { kind: "loading" }
@@ -56,6 +62,7 @@ type State =
 function UsersList() {
   const { user: viewer } = useAuth();
   const isStateAdmin = viewer?.role === "STATE_ADMIN";
+  const isDistrictAdmin = viewer?.role === "DISTRICT_ADMIN";
   const [instrumentMeta, setInstrumentMeta] = useState<InstrumentMeta | null>(null);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -85,8 +92,8 @@ function UsersList() {
     const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     if (debounced) params.set("q", debounced);
     if (role !== ALL) params.set("role", role);
-    if (stateCode && !isStateAdmin) params.set("state_code", stateCode);
-    if (districtCode) params.set("district_code", districtCode);
+    if (stateCode && !isStateAdmin && !isDistrictAdmin) params.set("state_code", stateCode);
+    if (districtCode && !isDistrictAdmin) params.set("district_code", districtCode);
     if (isActive) params.set("is_active", isActive);
     getUsers(params).then(
       (data) => !cancelled && setState({ kind: "ready", data }),
@@ -102,7 +109,17 @@ function UsersList() {
     return () => {
       cancelled = true;
     };
-  }, [debounced, role, stateCode, districtCode, isActive, page, refreshNonce, isStateAdmin]);
+  }, [
+    debounced,
+    role,
+    stateCode,
+    districtCode,
+    isActive,
+    page,
+    refreshNonce,
+    isStateAdmin,
+    isDistrictAdmin,
+  ]);
 
   async function toggle(userId: string, nextActive: boolean) {
     await patchUserActive(userId, nextActive);
@@ -116,7 +133,8 @@ function UsersList() {
 
   const data = state.kind === "ready" ? state.data : null;
   const lastPage = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
-  const effectiveStateCode = isStateAdmin ? (viewer?.state_code ?? "") : stateCode;
+  const effectiveStateCode =
+    isStateAdmin || isDistrictAdmin ? (viewer?.state_code ?? "") : stateCode;
   const districtsForState =
     instrumentMeta?.regions.find((r) => r.state_code === effectiveStateCode)?.districts ?? [];
   const stateOptions = [
@@ -127,6 +145,11 @@ function UsersList() {
     { value: "", label: "All districts" },
     ...districtsForState.map((d) => ({ value: d.code, label: d.name })),
   ];
+  const roleOptions = isDistrictAdmin
+    ? DISTRICT_ADMIN_ROLE_OPTIONS
+    : isStateAdmin
+      ? STATE_ADMIN_ROLE_OPTIONS
+      : ROLE_OPTIONS;
 
   return (
     <div className="grid gap-6">
@@ -135,22 +158,33 @@ function UsersList() {
           <h1 className="text-2xl font-semibold">Users</h1>
           <p className="text-sm text-muted-foreground">Official accounts: admins and officers.</p>
         </div>
-        <button type="button" className={buttonVariants()} onClick={() => setCreateOpen(true)}>
-          Create official account
-        </button>
+        {/* Spec 21 D1: DISTRICT_ADMIN never creates accounts — POST /api/users doesn't admit it. */}
+        {isDistrictAdmin ? null : (
+          <button type="button" className={buttonVariants()} onClick={() => setCreateOpen(true)}>
+            Create official account
+          </button>
+        )}
       </div>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create official account</DialogTitle>
-          </DialogHeader>
-          <UserCreateForm onCreated={onCreated} />
-        </DialogContent>
-      </Dialog>
+      {isDistrictAdmin ? null : (
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create official account</DialogTitle>
+            </DialogHeader>
+            <UserCreateForm onCreated={onCreated} />
+          </DialogContent>
+        </Dialog>
+      )}
 
       <div
-        className={`grid gap-3 ${isStateAdmin ? "sm:grid-cols-[1fr_10rem_10rem_8rem]" : "sm:grid-cols-[1fr_10rem_10rem_10rem_8rem]"}`}
+        className={`grid gap-3 ${
+          isDistrictAdmin
+            ? "sm:grid-cols-[1fr_10rem_8rem]"
+            : isStateAdmin
+              ? "sm:grid-cols-[1fr_10rem_10rem_8rem]"
+              : "sm:grid-cols-[1fr_10rem_10rem_10rem_8rem]"
+        }`}
       >
         <Input
           type="search"
@@ -165,13 +199,13 @@ function UsersList() {
           name="role_filter"
           label="Role"
           value={role}
-          options={isStateAdmin ? STATE_ADMIN_ROLE_OPTIONS : ROLE_OPTIONS}
+          options={roleOptions}
           onChange={(v) => {
             setRole(v || ALL);
             setPage(1);
           }}
         />
-        {isStateAdmin ? null : (
+        {isStateAdmin || isDistrictAdmin ? null : (
           <SelectField
             name="state_filter"
             label="State"
@@ -184,17 +218,19 @@ function UsersList() {
             }}
           />
         )}
-        <SelectField
-          name="district_filter"
-          label="District"
-          value={districtCode}
-          options={districtOptions}
-          onChange={(v) => {
-            setDistrictCode(v);
-            setPage(1);
-          }}
-          disabled={!effectiveStateCode}
-        />
+        {isDistrictAdmin ? null : (
+          <SelectField
+            name="district_filter"
+            label="District"
+            value={districtCode}
+            options={districtOptions}
+            onChange={(v) => {
+              setDistrictCode(v);
+              setPage(1);
+            }}
+            disabled={!effectiveStateCode}
+          />
+        )}
         <SelectField
           name="active_filter"
           label="Status"
@@ -225,8 +261,8 @@ function UsersList() {
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
-                {isStateAdmin ? null : <TableHead>State</TableHead>}
-                <TableHead>District</TableHead>
+                {isStateAdmin || isDistrictAdmin ? null : <TableHead>State</TableHead>}
+                {isDistrictAdmin ? null : <TableHead>District</TableHead>}
                 <TableHead>Status</TableHead>
                 <TableHead />
               </TableRow>
@@ -237,8 +273,10 @@ function UsersList() {
                   <TableCell>{u.full_name}</TableCell>
                   <TableCell className="text-sm">{u.email}</TableCell>
                   <TableCell>{u.role}</TableCell>
-                  {isStateAdmin ? null : <TableCell>{u.state_code ?? "—"}</TableCell>}
-                  <TableCell>{u.district_code ?? "—"}</TableCell>
+                  {isStateAdmin || isDistrictAdmin ? null : (
+                    <TableCell>{u.state_code ?? "—"}</TableCell>
+                  )}
+                  {isDistrictAdmin ? null : <TableCell>{u.district_code ?? "—"}</TableCell>}
                   <TableCell>
                     <ActiveBadge active={u.is_active} />
                   </TableCell>
@@ -292,7 +330,7 @@ function UsersList() {
 
 export default function UsersPage() {
   const { user } = useAuth();
-  if (!user || !["SUPER_ADMIN", "STATE_ADMIN"].includes(user.role)) {
+  if (!user || !["SUPER_ADMIN", "STATE_ADMIN", "DISTRICT_ADMIN"].includes(user.role)) {
     return <StateMessage title={NO_ACCESS} />;
   }
   return <UsersList />;

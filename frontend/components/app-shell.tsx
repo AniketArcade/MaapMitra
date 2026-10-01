@@ -66,7 +66,7 @@ const GATC_NAV = [
 ];
 
 // Spec 17 §6.8: SUPER_ADMIN gets a fuller flat sidebar instead of the single "Admin" link
-// DISTRICT_ADMIN still keeps (spec 17 D1; spec 18 D1 keeps DISTRICT_ADMIN on it too, for now).
+// DISTRICT_ADMIN used to keep (spec 17 D1; spec 21 finally gives DISTRICT_ADMIN its own nav below).
 const SUPER_ADMIN_NAV = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/admin/applications", label: "Applications", icon: FileText },
@@ -89,6 +89,22 @@ const STATE_ADMIN_NAV = [
   { href: "/admin/certificates", label: "Certificates", icon: Award },
   { href: "/admin/certificates/expiring-soon", label: "Expiring soon", icon: Clock3 },
   { href: "/admin/districts", label: "Districts", icon: MapPin },
+  { href: "/admin/lmo", label: "LMO directory", icon: UserCog },
+  { href: "/admin/gatc", label: "GATC directory", icon: Building2 },
+  { href: "/admin/users", label: "Users", icon: Users },
+  { href: "/admin/audit-logs", label: "Audit logs", icon: ScrollText },
+  { href: "/profile", label: "Profile", icon: User },
+];
+
+// Spec 21 §6.17: DISTRICT_ADMIN gets its own flat sidebar, one rank narrower than
+// STATE_ADMIN_NAV — no "Districts" link (there's only one district, already the dashboard's own
+// profile row).
+const DISTRICT_ADMIN_NAV = [
+  { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/admin/applications", label: "Applications", icon: FileText },
+  { href: "/instruments", label: "Instruments", icon: Gauge },
+  { href: "/admin/certificates", label: "Certificates", icon: Award },
+  { href: "/admin/certificates/expiring-soon", label: "Expiring soon", icon: Clock3 },
   { href: "/admin/lmo", label: "LMO directory", icon: UserCog },
   { href: "/admin/gatc", label: "GATC directory", icon: Building2 },
   { href: "/admin/users", label: "Users", icon: Users },
@@ -120,13 +136,15 @@ export function AppShell({ children }: { children: ReactNode }) {
       ? SUPER_ADMIN_NAV
       : user.role === "STATE_ADMIN"
         ? STATE_ADMIN_NAV
-        : user.role === "LM_OFFICER"
-          ? OFFICER_NAV
-          : user.role === "GATC"
-            ? GATC_NAV
-            : ADMIN_ROLES.includes(user.role)
-              ? [...NAV, { href: "/admin", label: "Admin", icon: ShieldCheck }]
-              : NAV;
+        : user.role === "DISTRICT_ADMIN"
+          ? DISTRICT_ADMIN_NAV
+          : user.role === "LM_OFFICER"
+            ? OFFICER_NAV
+            : user.role === "GATC"
+              ? GATC_NAV
+              : ADMIN_ROLES.includes(user.role)
+                ? [...NAV, { href: "/admin", label: "Admin", icon: ShieldCheck }]
+                : NAV;
 
   return (
     <SidebarProvider>

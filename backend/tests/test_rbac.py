@@ -123,8 +123,9 @@ def test_create_user_duplicate_email(client: TestClient, make_user) -> None:  # 
 # Spec 17: every new/extended endpoint is SUPER_ADMIN-only (except the harmless, unrestricted
 # state_code/district_code additions to GET /api/applications and the already-shared
 # GET /admin/state-overview, both covered by their own test files' own RBAC cases).
-# Spec 18 widens four of these to also admit STATE_ADMIN (narrower-scoped) — the in-state cases
-# here still only prove the router-level gate; cross-state/peer-rank rejections and GET
+# Spec 18 widens four of these to also admit STATE_ADMIN (narrower-scoped); spec 21 widens the
+# same four again to admit DISTRICT_ADMIN (narrower still) — the in-jurisdiction cases here only
+# prove the router-level gate; cross-jurisdiction/peer-rank rejections and GET
 # /admin/district-overview's own RBAC sweep live in tests/test_users.py,
 # tests/test_organizations.py, tests/test_audit_logs.py and tests/test_admin_district_overview.py.
 # ---------------------------------------------------------------------------
@@ -132,35 +133,44 @@ def test_create_user_duplicate_email(client: TestClient, make_user) -> None:  # 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
 def test_list_users_super_admin_and_state_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
+    # Spec 21 §4: DISTRICT_ADMIN admitted too — cross-jurisdiction/peer-rank rejections live in
+    # tests/test_users.py, not duplicated here.
     res = client.get("/api/users", headers=auth_header(make_user(role)))
-    assert res.status_code == (200 if role in (Role.SUPER_ADMIN, Role.STATE_ADMIN) else 403)
+    allowed = role in (Role.SUPER_ADMIN, Role.STATE_ADMIN, Role.DISTRICT_ADMIN)
+    assert res.status_code == (200 if allowed else 403)
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
 def test_patch_user_super_admin_and_state_admin(client: TestClient, make_user, role: Role) -> None:  # noqa: ANN001
     # target defaults to JH/DHN (make_user(LM_OFFICER)'s own default), matching a STATE_ADMIN
-    # actor's own state (also JH by default) — an in-state, lower-rank target.
+    # actor's own state (also JH by default) and a DISTRICT_ADMIN actor's own state+district
+    # (also JH/DHN by default, spec 21 §4) — an in-jurisdiction, lower-rank target for all three.
     target = make_user(Role.LM_OFFICER)
     res = client.patch(
         f"/api/users/{target.id}", json={"is_active": False}, headers=auth_header(make_user(role))
     )
-    assert res.status_code == (200 if role in (Role.SUPER_ADMIN, Role.STATE_ADMIN) else 403)
+    allowed = role in (Role.SUPER_ADMIN, Role.STATE_ADMIN, Role.DISTRICT_ADMIN)
+    assert res.status_code == (200 if allowed else 403)
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
 def test_list_audit_logs_super_admin_and_state_admin(
     client: TestClient, make_user, role: Role
 ) -> None:  # noqa: ANN001
+    # Spec 21 §4: DISTRICT_ADMIN admitted too.
     res = client.get("/api/audit-logs", headers=auth_header(make_user(role)))
-    assert res.status_code == (200 if role in (Role.SUPER_ADMIN, Role.STATE_ADMIN) else 403)
+    allowed = role in (Role.SUPER_ADMIN, Role.STATE_ADMIN, Role.DISTRICT_ADMIN)
+    assert res.status_code == (200 if allowed else 403)
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
 def test_list_gatc_directory_super_admin_and_state_admin(
     client: TestClient, make_user, role: Role
 ) -> None:  # noqa: ANN001
+    # Spec 21 §4: DISTRICT_ADMIN admitted too.
     res = client.get("/api/organizations?type=GATC", headers=auth_header(make_user(role)))
-    assert res.status_code == (200 if role in (Role.SUPER_ADMIN, Role.STATE_ADMIN) else 403)
+    allowed = role in (Role.SUPER_ADMIN, Role.STATE_ADMIN, Role.DISTRICT_ADMIN)
+    assert res.status_code == (200 if allowed else 403)
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)

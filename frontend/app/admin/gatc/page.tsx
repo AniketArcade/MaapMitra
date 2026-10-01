@@ -34,9 +34,11 @@ type State =
 // for a STATE_ADMIN viewer, the State filter is hidden (scope_organizations() already floors
 // every result to their own state, so a mismatched filter would just silently return nothing —
 // hiding it is UX consistency with the Users/LMO pages, not a correctness requirement here).
+// Spec 21: a DISTRICT_ADMIN viewer loses the District filter too, same reasoning.
 function GatcDirectoryList() {
   const { user } = useAuth();
   const isStateAdmin = user?.role === "STATE_ADMIN";
+  const isDistrictAdmin = user?.role === "DISTRICT_ADMIN";
   const [instrumentMeta, setInstrumentMeta] = useState<InstrumentMeta | null>(null);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -63,8 +65,8 @@ function GatcDirectoryList() {
     let cancelled = false;
     const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     if (debounced) params.set("q", debounced);
-    if (stateCode && !isStateAdmin) params.set("state_code", stateCode);
-    if (districtCode) params.set("district_code", districtCode);
+    if (stateCode && !isStateAdmin && !isDistrictAdmin) params.set("state_code", stateCode);
+    if (districtCode && !isDistrictAdmin) params.set("district_code", districtCode);
     if (isActive) params.set("is_active", isActive);
     getGatcDirectory(params).then(
       (data) => !cancelled && setState({ kind: "ready", data }),
@@ -80,7 +82,7 @@ function GatcDirectoryList() {
     return () => {
       cancelled = true;
     };
-  }, [debounced, stateCode, districtCode, isActive, page, refreshNonce, isStateAdmin]);
+  }, [debounced, stateCode, districtCode, isActive, page, refreshNonce, isStateAdmin, isDistrictAdmin]);
 
   async function toggle(userId: string, nextActive: boolean) {
     await patchUserActive(userId, nextActive);
@@ -89,7 +91,7 @@ function GatcDirectoryList() {
 
   const data = state.kind === "ready" ? state.data : null;
   const lastPage = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
-  const effectiveStateCode = isStateAdmin ? (user?.state_code ?? "") : stateCode;
+  const effectiveStateCode = isStateAdmin || isDistrictAdmin ? (user?.state_code ?? "") : stateCode;
   const districtsForState =
     instrumentMeta?.regions.find((r) => r.state_code === effectiveStateCode)?.districts ?? [];
   const stateOptions = [
@@ -111,7 +113,13 @@ function GatcDirectoryList() {
       </div>
 
       <div
-        className={`grid gap-3 ${isStateAdmin ? "sm:grid-cols-[1fr_10rem_8rem]" : "sm:grid-cols-[1fr_10rem_10rem_8rem]"}`}
+        className={`grid gap-3 ${
+          isDistrictAdmin
+            ? "sm:grid-cols-[1fr_8rem]"
+            : isStateAdmin
+              ? "sm:grid-cols-[1fr_10rem_8rem]"
+              : "sm:grid-cols-[1fr_10rem_10rem_8rem]"
+        }`}
       >
         <Input
           type="search"
@@ -122,7 +130,7 @@ function GatcDirectoryList() {
           className="h-10"
           aria-label="Search GATC organizations"
         />
-        {isStateAdmin ? null : (
+        {isStateAdmin || isDistrictAdmin ? null : (
           <SelectField
             name="state_filter"
             label="State"
@@ -135,17 +143,19 @@ function GatcDirectoryList() {
             }}
           />
         )}
-        <SelectField
-          name="district_filter"
-          label="District"
-          value={districtCode}
-          options={districtOptions}
-          onChange={(v) => {
-            setDistrictCode(v);
-            setPage(1);
-          }}
-          disabled={!effectiveStateCode}
-        />
+        {isDistrictAdmin ? null : (
+          <SelectField
+            name="district_filter"
+            label="District"
+            value={districtCode}
+            options={districtOptions}
+            onChange={(v) => {
+              setDistrictCode(v);
+              setPage(1);
+            }}
+            disabled={!effectiveStateCode}
+          />
+        )}
         <SelectField
           name="active_filter"
           label="Status"
@@ -176,9 +186,11 @@ function GatcDirectoryList() {
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <h2 className="font-medium">{org.name}</h2>
-                    <p className="text-sm text-muted-foreground">
-                      {org.district_code}, {org.state_code}
-                    </p>
+                    {isDistrictAdmin ? null : (
+                      <p className="text-sm text-muted-foreground">
+                        {org.district_code}, {org.state_code}
+                      </p>
+                    )}
                   </div>
                   <ActiveBadge active={org.active} />
                 </div>
@@ -266,7 +278,7 @@ function GatcDirectoryList() {
 
 export default function GatcDirectoryPage() {
   const { user } = useAuth();
-  if (!user || !["SUPER_ADMIN", "STATE_ADMIN"].includes(user.role)) {
+  if (!user || !["SUPER_ADMIN", "STATE_ADMIN", "DISTRICT_ADMIN"].includes(user.role)) {
     return <StateMessage title={NO_ACCESS} />;
   }
   return <GatcDirectoryList />;

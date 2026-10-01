@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query
 
 from app.core.deps import DB, require_roles
-from app.core.roles import Role
+from app.core.roles import ADMIN_ROLES
 from app.models.user import User
 from app.schemas.common import Page, PageParams
 from app.schemas.organization import GatcDirectoryOut, GatcDirectoryUserOut
@@ -13,16 +13,17 @@ router = APIRouter(prefix="/organizations", tags=["organizations"])
 
 # Spec 18 §4: widened from SUPER_ADMIN-only — gatc_directory() already calls
 # scope_organizations(select(...), actor), which already has a STATE_ADMIN branch restricting to
-# the caller's own state_code. Zero service changes needed for this one (unlike users/audit-logs
-# below, which have no scope_* floor of their own).
-SuperOrStateAdmin = Annotated[User, Depends(require_roles(Role.SUPER_ADMIN, Role.STATE_ADMIN))]
+# the caller's own state_code. Spec 21 §4: widened again to DISTRICT_ADMIN for the same reason —
+# scope_organizations() already has that branch too (state AND district). Zero service changes
+# needed for this one (unlike users/audit-logs below, which have no scope_* floor of their own).
+Admin = Annotated[User, Depends(require_roles(*ADMIN_ROLES))]
 
 
 # Spec 17 D3: the only directory this step builds. `type` is required — anything but "GATC"
 # is 422, not a 404 or an empty page, since no other directory exists yet to return.
 @router.get("")
 def list_organizations(
-    actor: SuperOrStateAdmin,
+    actor: Admin,
     db: DB,
     paging: Annotated[PageParams, Depends()],
     type: Literal["GATC"],

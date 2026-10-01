@@ -296,3 +296,125 @@ def test_state_admin_self_deactivation_still_409(client: TestClient, make_user) 
         headers=auth_header(state_admin),
     )
     assert res.status_code == 409, res.text
+
+
+# ---------------------------------------------------------------------------
+# Spec 21: DISTRICT_ADMIN scoping for GET/PATCH /api/users — one rank down from the STATE_ADMIN
+# block above, with the same floor applied to both state_code AND district_code. POST /api/users
+# stays SUPER_ADMIN/STATE_ADMIN-only (D1) — covered by test_district_admin_create_is_403 below,
+# not a full block of its own since there's nothing to narrow.
+# ---------------------------------------------------------------------------
+
+
+def test_district_admin_list_scoped_to_own_district(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    dhn_officer = make_user(Role.LM_OFFICER)  # JH/DHN by default
+    rnc_officer = make_user(Role.LM_OFFICER, district_code="RNC")  # same state, other district
+    ka_officer = make_user(Role.LM_OFFICER, state_code="KA", district_code="BU")
+    peer = make_user(Role.DISTRICT_ADMIN, email="peer@test.demo")
+    state_admin = make_user(Role.STATE_ADMIN)
+    super_admin = make_user(Role.SUPER_ADMIN)
+
+    res = client.get("/api/users", headers=auth_header(district_admin))
+    assert res.status_code == 200, res.text
+    ids = {u["id"] for u in res.json()["items"]}
+    assert ids == {str(dhn_officer.id)}
+    assert str(rnc_officer.id) not in ids
+    assert str(ka_officer.id) not in ids
+    assert str(peer.id) not in ids
+    assert str(state_admin.id) not in ids
+    assert str(super_admin.id) not in ids
+    assert str(district_admin.id) not in ids
+
+
+def test_district_admin_list_state_code_mismatch_is_422(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    res = client.get("/api/users?state_code=KA", headers=auth_header(district_admin))
+    assert res.status_code == 422, res.text
+    assert res.json()["detail"][0]["loc"] == ["body", "state_code"]
+
+
+def test_district_admin_list_district_code_mismatch_is_422(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    res = client.get("/api/users?district_code=RNC", headers=auth_header(district_admin))
+    assert res.status_code == 422, res.text
+    assert res.json()["detail"][0]["loc"] == ["body", "district_code"]
+
+
+def test_district_admin_list_role_filter_rejects_peer_or_above(
+    client: TestClient, make_user
+) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)
+    for role in ("DISTRICT_ADMIN", "STATE_ADMIN", "SUPER_ADMIN"):
+        res = client.get(f"/api/users?role={role}", headers=auth_header(district_admin))
+        assert res.status_code == 403, res.text
+
+
+def test_district_admin_list_role_filter_admits_lm_officer(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)
+    officer = make_user(Role.LM_OFFICER)  # JH/DHN
+    res = client.get("/api/users?role=LM_OFFICER", headers=auth_header(district_admin))
+    assert res.status_code == 200, res.text
+    assert {u["id"] for u in res.json()["items"]} == {str(officer.id)}
+
+
+def test_district_admin_create_is_403(client: TestClient, make_user) -> None:
+    # Spec 21 D1: no account creation for DISTRICT_ADMIN, even for an in-jurisdiction LM_OFFICER
+    # payload — POST /api/users stays SUPER_ADMIN/STATE_ADMIN-only.
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    res = client.post("/api/users", json=_new_user_payload(), headers=auth_header(district_admin))
+    assert res.status_code == 403, res.text
+
+
+def test_district_admin_patch_in_district_lower_rank_succeeds(
+    client: TestClient, make_user
+) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    officer = make_user(Role.LM_OFFICER)  # JH/DHN
+    res = client.patch(
+        f"/api/users/{officer.id}", json={"is_active": False}, headers=auth_header(district_admin)
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["is_active"] is False
+
+
+def test_district_admin_patch_cross_district_is_403(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    officer = make_user(Role.LM_OFFICER, district_code="RNC")  # same state, other district
+    res = client.patch(
+        f"/api/users/{officer.id}", json={"is_active": False}, headers=auth_header(district_admin)
+    )
+    assert res.status_code == 403, res.text
+
+
+def test_district_admin_patch_cross_state_is_403(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    officer = make_user(Role.LM_OFFICER, state_code="KA", district_code="BU")
+    res = client.patch(
+        f"/api/users/{officer.id}", json={"is_active": False}, headers=auth_header(district_admin)
+    )
+    assert res.status_code == 403, res.text
+
+
+def test_district_admin_patch_peer_or_above_is_403(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    peer = make_user(Role.DISTRICT_ADMIN, email="peer@test.demo")
+    state_admin = make_user(Role.STATE_ADMIN)
+    super_admin = make_user(Role.SUPER_ADMIN)
+    for target in (peer, state_admin, super_admin):
+        res = client.patch(
+            f"/api/users/{target.id}",
+            json={"is_active": False},
+            headers=auth_header(district_admin),
+        )
+        assert res.status_code == 403, res.text
+
+
+def test_district_admin_self_deactivation_still_409(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)
+    res = client.patch(
+        f"/api/users/{district_admin.id}",
+        json={"is_active": False},
+        headers=auth_header(district_admin),
+    )
+    assert res.status_code == 409, res.text

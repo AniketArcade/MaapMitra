@@ -190,3 +190,99 @@ def test_state_admin_jurisdiction_filter_composes_with_action_filter(
     entity_ids = {i["entity_id"] for i in res.json()["items"]}
     assert str(jh_officer.id) in entity_ids
     assert str(ka_officer.id) not in entity_ids
+
+
+# ---------------------------------------------------------------------------
+# Spec 21 §4: jurisdiction filter for a DISTRICT_ADMIN actor — same two outer joins as STATE_ADMIN
+# above, with district_code ANDed onto each side. Router-level admission lives in test_rbac.py.
+# ---------------------------------------------------------------------------
+
+
+def test_district_admin_sees_only_in_district_official_actor_rows(
+    client: TestClient, make_user
+) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    dhn_officer = make_user(Role.LM_OFFICER, email="dhn.officer@test.demo")  # JH/DHN
+    rnc_officer = make_user(
+        Role.LM_OFFICER, email="rnc.officer@test.demo", district_code="RNC"
+    )  # same state, other district
+    ka_officer = make_user(
+        Role.LM_OFFICER, email="ka.officer@test.demo", state_code="KA", district_code="BU"
+    )
+    client.post("/api/auth/login", json={"email": dhn_officer.email, "password": PASSWORD})
+    client.post("/api/auth/login", json={"email": rnc_officer.email, "password": PASSWORD})
+    client.post("/api/auth/login", json={"email": ka_officer.email, "password": PASSWORD})
+
+    res = client.get("/api/audit-logs?action=LOGIN_SUCCEEDED", headers=auth_header(district_admin))
+    assert res.status_code == 200, res.text
+    actor_ids = {i["actor_user_id"] for i in res.json()["items"]}
+    assert str(dhn_officer.id) in actor_ids
+    assert str(rnc_officer.id) not in actor_ids
+    assert str(ka_officer.id) not in actor_ids
+
+
+def test_district_admin_sees_org_actor_rows_via_organization_district(
+    client: TestClient, make_user
+) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+
+    dhn_reg = client.post("/api/auth/register", json=register_body(email="dhn.owner@test.demo"))
+    assert dhn_reg.status_code == 201, dhn_reg.text
+    dhn_owner_id = dhn_reg.json()["user"]["id"]
+
+    rnc_reg = client.post(
+        "/api/auth/register",
+        json=register_body(
+            email="rnc.owner@test.demo",
+            organization_name="Ranchi Traders",
+            district_code="RNC",
+        ),
+    )
+    assert rnc_reg.status_code == 201, rnc_reg.text
+    rnc_owner_id = rnc_reg.json()["user"]["id"]
+
+    res = client.get("/api/audit-logs?action=USER_REGISTERED", headers=auth_header(district_admin))
+    assert res.status_code == 200, res.text
+    actor_ids = {i["actor_user_id"] for i in res.json()["items"]}
+    assert dhn_owner_id in actor_ids
+    assert rnc_owner_id not in actor_ids
+
+
+def test_district_admin_excludes_system_actor_rows(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)
+    super_admin = make_user(Role.SUPER_ADMIN)
+    client.post("/api/auth/login", json={"email": "nobody@test.demo", "password": "wrong-pass"})
+
+    res = client.get("/api/audit-logs?action=LOGIN_FAILED", headers=auth_header(district_admin))
+    assert res.status_code == 200, res.text
+    assert res.json()["items"] == []
+
+    res = client.get("/api/audit-logs?action=LOGIN_FAILED", headers=auth_header(super_admin))
+    assert len(res.json()["items"]) == 1
+
+
+def test_district_admin_jurisdiction_filter_composes_with_action_filter(
+    client: TestClient, make_user
+) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    dhn_officer = make_user(Role.LM_OFFICER)  # JH/DHN
+    rnc_officer = make_user(Role.LM_OFFICER, district_code="RNC")  # same state, other district
+    super_admin = make_user(Role.SUPER_ADMIN)
+    client.patch(
+        f"/api/users/{dhn_officer.id}",
+        json={"is_active": False},
+        headers=auth_header(district_admin),
+    )
+    # A SUPER_ADMIN deactivating the RNC officer — this is the row the district_admin must never
+    # see, even though it's the same state.
+    client.patch(
+        f"/api/users/{rnc_officer.id}", json={"is_active": False}, headers=auth_header(super_admin)
+    )
+
+    res = client.get(
+        "/api/audit-logs?action=USER_STATUS_CHANGED", headers=auth_header(district_admin)
+    )
+    assert res.status_code == 200, res.text
+    entity_ids = {i["entity_id"] for i in res.json()["items"]}
+    assert str(dhn_officer.id) in entity_ids
+    assert str(rnc_officer.id) not in entity_ids

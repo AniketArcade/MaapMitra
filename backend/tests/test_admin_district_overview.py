@@ -127,6 +127,26 @@ def test_district_admin_gets_own_state_rows_too(client: TestClient, make_user) -
     assert {r["state_code"] for r in res.json()} == {"JH"}
 
 
+def test_district_admin_other_districts_zero_filled(
+    client: TestClient, make_user, make_instrument
+) -> None:
+    """Spec 21 D2/§3: the frontend shows only the caller's own row from this endpoint's response
+    as a "district profile" — safe only because every scope_* helper already floors a
+    DISTRICT_ADMIN caller's queries to their own district, so every *other* district's row here is
+    genuinely zero, not merely a row the caller happens not to be shown."""
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    dhn_owner = make_user(Role.BUSINESS)  # JH/DHN by default
+    make_instrument(dhn_owner)
+    rnc_owner = make_user(Role.BUSINESS, org_district="RNC")  # same state, other district
+    make_instrument(rnc_owner)
+
+    res = client.get("/api/admin/district-overview", headers=auth_header(district_admin))
+    assert res.status_code == 200, res.text
+    rows = {r["district_code"]: r for r in res.json()}
+    assert rows["DHN"]["instrument_count"] == 1
+    assert rows["RNC"]["instrument_count"] == 0
+
+
 def test_business_officer_gatc_forbidden(client: TestClient, make_user) -> None:
     for role in (Role.BUSINESS, Role.LM_OFFICER, Role.GATC):
         res = client.get(

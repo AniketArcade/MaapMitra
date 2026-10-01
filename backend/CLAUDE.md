@@ -575,11 +575,11 @@ PATCH /api/applications/{id}/review-checklist   # LM_OFFICER only, DOCUMENT_REVI
 DELETE /api/documents/{id}         # BUSINESS/DRAFT, or assigned LM_OFFICER/GATC/INSPECTION evidence (step 6, GATC added step 20)
 GET   /api/gatc/eligible          # LM_OFFICER only; ?category_id=<id>, jurisdiction-scoped GATC orgs (step 15)
 GET   /api/gatc/{organization_id}/users   # LM_OFFICER only; active GATC-role users of one org (step 15)
-GET   /api/users                  # SUPER_ADMIN + STATE_ADMIN (own state, step 18); official accounts (role in OFFICIAL_ROLES), filters role/state_code/district_code/is_active/q; ?role=LM_OFFICER populates pending_cases/completed_cases per officer (step 17)
-POST  /api/users                  # SUPER_ADMIN (any role) + STATE_ADMIN (DISTRICT_ADMIN/LM_OFFICER only, own state) (step 17, extended step 18)
-PATCH /api/users/{id}             # SUPER_ADMIN + STATE_ADMIN (own state, strictly lower rank, step 18); body {is_active} only; 409 on self-deactivation (step 17)
-GET   /api/audit-logs             # SUPER_ADMIN + STATE_ADMIN (own-state jurisdiction filter, step 18); filters date_from/date_to/actor_user_id/action/entity_type; actor_name null = system actor (step 17)
-GET   /api/organizations?type=GATC   # SUPER_ADMIN + STATE_ADMIN (own state, step 18); GATC directory with live pending/completed case counts per org (step 17)
+GET   /api/users                  # SUPER_ADMIN + STATE_ADMIN + DISTRICT_ADMIN (own state[+district], step 18, step 21); official accounts (role in OFFICIAL_ROLES), filters role/state_code/district_code/is_active/q; ?role=LM_OFFICER populates pending_cases/completed_cases per officer (step 17)
+POST  /api/users                  # SUPER_ADMIN (any role) + STATE_ADMIN (DISTRICT_ADMIN/LM_OFFICER only, own state) (step 17, extended step 18); DISTRICT_ADMIN deliberately NOT admitted (step 21 D1)
+PATCH /api/users/{id}             # SUPER_ADMIN + STATE_ADMIN (own state, strictly lower rank, step 18) + DISTRICT_ADMIN (own state+district, strictly lower rank, step 21); body {is_active} only; 409 on self-deactivation (step 17)
+GET   /api/audit-logs             # SUPER_ADMIN + STATE_ADMIN (own-state jurisdiction filter, step 18) + DISTRICT_ADMIN (own-district jurisdiction filter, step 21); filters date_from/date_to/actor_user_id/action/entity_type; actor_name null = system actor (step 17)
+GET   /api/organizations?type=GATC   # SUPER_ADMIN + STATE_ADMIN (own state, step 18) + DISTRICT_ADMIN (own district, step 21); GATC directory with live pending/completed case counts per org (step 17)
 GET   /api/applications?state_code=&district_code=   # additive filters on the existing list, any role (no-op for jurisdiction-locked callers) (step 17)
 GET   /admin/state-overview       # ADMIN_ROLES; one row per REGIONS state/UT, zero-filled, never paginated (step 17)
 GET   /admin/district-overview    # ADMIN_ROLES; one row per district of one state, zero-filled, never paginated; state_code forced for STATE_ADMIN/DISTRICT_ADMIN, required for SUPER_ADMIN (step 18)
@@ -791,10 +791,10 @@ new routes/service logic over columns that already existed.
   scope-floored, unlike the user-identity endpoints above. `SUPER_ADMIN` must supply one (`422` if
   missing, `404` if not a real state) to drill into one state from the existing state-wise table.
   Reuses the router's existing `Admin = require_roles(*ADMIN_ROLES)` — no new dependency, so
-  `DISTRICT_ADMIN` can call it too (harmless; no frontend page uses it for that role yet).
-- `STATE_ADMIN` only for Phase 1 (same sequencing spec 17 used for `SUPER_ADMIN`): `DISTRICT_ADMIN`
-  keeps today's plain `ExpiryDashboard`, completely untouched by this step — the data layer
-  already generalizes to it for free, just no frontend page built yet.
+  `DISTRICT_ADMIN` can call it too (harmless; step 21 below is the frontend page that does).
+- `STATE_ADMIN` only for Phase 1 (same sequencing spec 17 used for `SUPER_ADMIN`): at the time of
+  this step, `DISTRICT_ADMIN` kept the plain `ExpiryDashboard`, untouched — step 21 below finally
+  gives it the data layer already generalized for free here.
 - Out of scope, recorded in the spec's §9: an enforcement module, notification center, CSV/PDF
   export, trend charts, "Average Scrutiny Time" (needs an `application_status_history`
   timestamp-diff aggregation that doesn't exist), Instrument-Type/assignee filters on
@@ -880,6 +880,65 @@ upload their own evidence photos. The frontend reflected this literally — `app
   reasoning on each, and §7 for the three real Decisions deferred (an instrument list for `GATC`,
   expiry monitoring for `GATC`, and surfacing `gatc_eligible_category_ids` on the `GATC` user's
   own profile).
+
+### District Admin (step 21, spec `docs/specs/21-district-admin.md`)
+
+Turns `DISTRICT_ADMIN`'s existing data-layer support into an actual page, one rank down from
+spec 18 — **supersedes** step 18's own "`DISTRICT_ADMIN` keeps today's plain `ExpiryDashboard`"
+line above: `DISTRICT_ADMIN` now gets `components/admin/district-admin-dashboard.tsx`, not the
+generic `ExpiryDashboard`. `DISTRICT_ADMIN` was already in `ADMIN_ROLES` and already had a
+`(DISTRICT_ADMIN, LM_OFFICER)` branch (state **and** district) in every `scope_*` helper, and was
+already a `Reader` on `applications`/`instruments`/`certificates`/`admin/certificates/*`/
+`admin/district-overview` — this step's only real backend work was the same three endpoints
+step 18 had to open up for `STATE_ADMIN`.
+
+- **`GET /api/organizations?type=GATC`**: router dependency widened again, from
+  `require_roles(Role.SUPER_ADMIN, Role.STATE_ADMIN)` to `require_roles(*ADMIN_ROLES)` (the
+  existing `core/roles.py` constant, already exactly `{SUPER_ADMIN, STATE_ADMIN, DISTRICT_ADMIN}`)
+  — **zero service change**, same reasoning as step 18: `scope_organizations()` already had the
+  `DISTRICT_ADMIN` branch, unused until now.
+- **`GET /api/users`**, **`PATCH /api/users/{id}`**: router dependency widened the same way for
+  these two only — **`POST /api/users` deliberately stays on the narrower
+  `require_roles(Role.SUPER_ADMIN, Role.STATE_ADMIN)`** (D1 below). `services/users.py` gained a
+  `DISTRICT_ADMIN` branch in `list_users()` and `set_active()`, mirroring the `STATE_ADMIN` branch
+  one rank down: both `state_code` **and** `district_code` must match the actor's own (`422` on
+  either mismatch, same D3 "reject, never override" rule); an explicit `role` filter for anything
+  but `LM_OFFICER` (the sole `OFFICIAL_ROLES` rank strictly below `DISTRICT_ADMIN`) → `403`;
+  omitting `role` narrows the base query to `LM_OFFICER` only. `create_user()` itself is
+  **unchanged** — `DISTRICT_ADMIN` never reaches it, since the router no longer routes it there.
+- **`GET /api/audit-logs`**: router dependency widened the same way. `list_audit_logs()` gained a
+  `DISTRICT_ADMIN` branch reusing the identical two outer joins step 18 built (official actor's
+  own columns; org actor's `organization_id -> organizations` columns), ANDing `district_code`
+  onto each side of the `OR` instead of checking `state_code` alone — strict district isolation,
+  same disclosed system-actor-row gap as `STATE_ADMIN`'s own branch, now also excluding other
+  districts in the same state.
+- **`GET /admin/district-overview`**: **no backend change at all** — already correct for
+  `DISTRICT_ADMIN` (`district_overview()`'s existing `state_code` forcing, §4 above, already
+  applies to it; every underlying `scope_*` call already floors to state **and** district for this
+  role). The new frontend (`DistrictAdminDashboard`) consumes this exact unmodified endpoint,
+  filtered client-side to the caller's own row (D2 below) rather than rendering the full
+  `DistrictOverviewTable` a `STATE_ADMIN` sees.
+- **D1 (the one real product decision this step made differently from step 18):** `DISTRICT_ADMIN`
+  does **not** create accounts. The source brief's own LMO-management and user-management sections
+  only ever list View/Activate-Deactivate for this role, never Create — unlike the State Admin
+  brief step 18 built from, which did carry that implication. `POST /api/users` was left
+  completely untouched rather than extended with a `DISTRICT_ADMIN_CREATABLE_ROLES` branch.
+- **D2:** the dashboard shows only the caller's own row of `GET /admin/district-overview`, not the
+  full zero-filled table — a table of ~20 zero districts and one real one would read as "no data,"
+  not "not your jurisdiction," even though nothing leaks (every other district's row is genuinely
+  zero through this caller's own scoping —
+  `tests/test_admin_district_overview.py::test_district_admin_other_districts_zero_filled` proves
+  this explicitly).
+- Frontend: `app/admin/applications|lmo|gatc|users|audit-logs|certificates/page.tsx` each gained a
+  `DISTRICT_ADMIN` branch alongside the existing `STATE_ADMIN` one — hiding **both** State and
+  District columns/filters (not just State), since both are fixed for this role; `/admin/users`
+  additionally hides the entire "Create official account" button/dialog for a `DISTRICT_ADMIN`
+  viewer (D1); `DISTRICT_ADMIN_NAV` (`components/app-shell.tsx`) is one rank narrower than
+  `STATE_ADMIN_NAV` — no "Districts" link. `app/admin/districts/page.tsx` stays `STATE_ADMIN`-only,
+  untouched.
+- Out of scope, same reasoning as steps 17/18: enforcement module, notification center, CSV/PDF
+  export, trend charts, "Average Scrutiny Time", Instrument-Type/assignee filters on
+  `/admin/applications`, editing a user's email/role/jurisdiction after creation.
 
 ## Auth and RBAC (spec: `docs/specs/01-login-rbac.md`)
 

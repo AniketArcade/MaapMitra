@@ -159,7 +159,7 @@ function CertificatesList() {
 
 export default function AdminCertificatesPage() {
   const { user } = useAuth();
-  if (!user || !["SUPER_ADMIN", "STATE_ADMIN"].includes(user.role)) {
+  if (!user || !["SUPER_ADMIN", "STATE_ADMIN", "DISTRICT_ADMIN"].includes(user.role)) {
     return <StateMessage title={NO_ACCESS} />;
   }
   return <CertificatesList />;

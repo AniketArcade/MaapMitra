@@ -19,6 +19,9 @@ STATE_ADMIN_CREATABLE_ROLES = frozenset({Role.DISTRICT_ADMIN, Role.LM_OFFICER})
 
 
 def create_user(db: Session, actor: User, body: UserCreate, *, ip: str) -> User:
+    # Spec 21 D1: DISTRICT_ADMIN is deliberately not admitted here — the router no longer routes
+    # it to this function at all (POST /users stays SuperOrStateAdmin-only), and this guard is the
+    # defence-in-depth backstop if that ever changes without this function being revisited.
     if actor.role not in (Role.SUPER_ADMIN, Role.STATE_ADMIN):  # defence in depth; router too
         raise Forbidden("Insufficient permissions")
     if actor.role == Role.STATE_ADMIN:
@@ -88,7 +91,11 @@ def list_users(
     client-sent state_code that mismatches the actor's own is rejected (422, D3: reject, never
     silently override), and an explicit role filter for a peer-or-above rank is rejected (403,
     ROLE_RANK's first real use, D2). Omitting role implicitly narrows to strictly-lower ranks,
-    not an error."""
+    not an error.
+
+    Spec 21 §4: a DISTRICT_ADMIN actor gets the identical treatment, one rank down — both
+    state_code and district_code must match their own (422 on either mismatch), and omitting role
+    narrows to LM_OFFICER only (the sole OFFICIAL_ROLES rank strictly below DISTRICT_ADMIN)."""
     stmt = select(User).where(User.role.in_(OFFICIAL_ROLES))
 
     if actor.role == Role.STATE_ADMIN:
@@ -100,6 +107,21 @@ def list_users(
                 raise Forbidden("Cannot view peers or higher-ranked roles")
         else:
             stmt = stmt.where(User.role.in_({Role.DISTRICT_ADMIN, Role.LM_OFFICER}))
+    elif actor.role == Role.DISTRICT_ADMIN:
+        # Spec 21 §4: same D3 "reject, never silently override" rule as STATE_ADMIN above, now
+        # checking both codes — a mismatch on either is rejected, not just state.
+        if state_code is not None and state_code != actor.state_code:
+            raise Unprocessable("state_code must match your own state", field="state_code")
+        if district_code is not None and district_code != actor.district_code:
+            raise Unprocessable("district_code must match your own district", field="district_code")
+        state_code = actor.state_code
+        district_code = actor.district_code
+        if role is not None:
+            if ROLE_RANK[role] >= ROLE_RANK[actor.role]:
+                raise Forbidden("Cannot view peers or higher-ranked roles")
+        else:
+            # LM_OFFICER is the only OFFICIAL_ROLES rank strictly below DISTRICT_ADMIN.
+            stmt = stmt.where(User.role == Role.LM_OFFICER)
 
     if role is not None:
         stmt = stmt.where(User.role == role)
@@ -152,6 +174,13 @@ def set_active(db: Session, actor: User, user_id: uuid.UUID, is_active: bool, *,
         raise Conflict("Cannot deactivate your own account")
     if actor.role == Role.STATE_ADMIN:
         if user.state_code != actor.state_code or ROLE_RANK[user.role] >= ROLE_RANK[actor.role]:
+            raise Forbidden("Cannot manage this account")
+    elif actor.role == Role.DISTRICT_ADMIN:
+        if (
+            user.state_code != actor.state_code
+            or user.district_code != actor.district_code
+            or ROLE_RANK[user.role] >= ROLE_RANK[actor.role]
+        ):
             raise Forbidden("Cannot manage this account")
     user.is_active = is_active
     audit.log(

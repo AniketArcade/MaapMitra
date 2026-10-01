@@ -34,10 +34,12 @@ type State =
 // than parameterized — this view is unconditionally unfiltered by jurisdiction (SUPER_ADMIN) and
 // adds State/District columns + filters the original page has no use for. Spec 18: a STATE_ADMIN
 // viewer gets the same page minus the (redundant, single-state) State column/filter — the backend
-// already scopes the list to their own state regardless.
+// already scopes the list to their own state regardless. Spec 21: a DISTRICT_ADMIN viewer loses
+// the District column/filter too (also redundant, single-district) on top of State.
 function AdminApplicationsList() {
   const { user } = useAuth();
   const isStateAdmin = user?.role === "STATE_ADMIN";
+  const isDistrictAdmin = user?.role === "DISTRICT_ADMIN";
   const router = useRouter();
   const searchParams = useSearchParams();
   const [meta, setMeta] = useState<ApplicationMeta | null>(null);
@@ -61,11 +63,12 @@ function AdminApplicationsList() {
     [instrumentMeta],
   );
   const rawStateCode = searchParams.get("state_code");
-  const stateCode = isStateAdmin
-    ? (user?.state_code ?? "")
-    : rawStateCode && knownStates.has(rawStateCode)
-      ? rawStateCode
-      : "";
+  const stateCode =
+    isStateAdmin || isDistrictAdmin
+      ? (user?.state_code ?? "")
+      : rawStateCode && knownStates.has(rawStateCode)
+        ? rawStateCode
+        : "";
   const districtsForState = useMemo(
     () => instrumentMeta?.regions.find((r) => r.state_code === stateCode)?.districts ?? [],
     [instrumentMeta, stateCode],
@@ -75,8 +78,11 @@ function AdminApplicationsList() {
     [districtsForState],
   );
   const rawDistrictCode = searchParams.get("district_code");
-  const districtCode =
-    rawDistrictCode && knownDistricts.has(rawDistrictCode) ? rawDistrictCode : "";
+  const districtCode = isDistrictAdmin
+    ? (user?.district_code ?? "")
+    : rawDistrictCode && knownDistricts.has(rawDistrictCode)
+      ? rawDistrictCode
+      : "";
 
   function pushFilters(next: { status?: string; state_code?: string; district_code?: string }) {
     const params = new URLSearchParams();
@@ -101,8 +107,8 @@ function AdminApplicationsList() {
     const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     if (debounced) params.set("q", debounced);
     if (status !== ALL) params.set("status", status);
-    if (stateCode && !isStateAdmin) params.set("state_code", stateCode);
-    if (districtCode) params.set("district_code", districtCode);
+    if (stateCode && !isStateAdmin && !isDistrictAdmin) params.set("state_code", stateCode);
+    if (districtCode && !isDistrictAdmin) params.set("district_code", districtCode);
     api<Page<Application>>(`/applications?${params}`).then(
       (data) => !cancelled && setState({ kind: "ready", data }),
       (err: unknown) => {
@@ -117,7 +123,7 @@ function AdminApplicationsList() {
     return () => {
       cancelled = true;
     };
-  }, [debounced, status, stateCode, districtCode, page, isStateAdmin]);
+  }, [debounced, status, stateCode, districtCode, page, isStateAdmin, isDistrictAdmin]);
 
   const data = state.kind === "ready" ? state.data : null;
   const lastPage = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
@@ -139,12 +145,22 @@ function AdminApplicationsList() {
       <div>
         <h1 className="text-2xl font-semibold">Applications</h1>
         <p className="text-sm text-muted-foreground">
-          {isStateAdmin ? "Every application in your state." : "Every application, across every state."}
+          {isDistrictAdmin
+            ? "Every application in your district."
+            : isStateAdmin
+              ? "Every application in your state."
+              : "Every application, across every state."}
         </p>
       </div>
 
       <div
-        className={`grid gap-3 ${isStateAdmin ? "sm:grid-cols-[1fr_12rem_12rem]" : "sm:grid-cols-[1fr_12rem_12rem_12rem]"}`}
+        className={`grid gap-3 ${
+          isDistrictAdmin
+            ? "sm:grid-cols-[1fr_12rem]"
+            : isStateAdmin
+              ? "sm:grid-cols-[1fr_12rem_12rem]"
+              : "sm:grid-cols-[1fr_12rem_12rem_12rem]"
+        }`}
       >
         <Input
           type="search"
@@ -162,7 +178,7 @@ function AdminApplicationsList() {
           options={statusOptions}
           onChange={(v) => pushFilters({ status: v || ALL })}
         />
-        {isStateAdmin ? null : (
+        {isStateAdmin || isDistrictAdmin ? null : (
           <SelectField
             name="state_filter"
             label="State"
@@ -171,14 +187,16 @@ function AdminApplicationsList() {
             onChange={(v) => pushFilters({ state_code: v, district_code: "" })}
           />
         )}
-        <SelectField
-          name="district_filter"
-          label="District"
-          value={districtCode}
-          options={districtOptions}
-          onChange={(v) => pushFilters({ district_code: v })}
-          disabled={!stateCode}
-        />
+        {isDistrictAdmin ? null : (
+          <SelectField
+            name="district_filter"
+            label="District"
+            value={districtCode}
+            options={districtOptions}
+            onChange={(v) => pushFilters({ district_code: v })}
+            disabled={!stateCode}
+          />
+        )}
       </div>
 
       {state.kind === "loading" ? (
@@ -199,8 +217,8 @@ function AdminApplicationsList() {
                 <TableHead>Instrument</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Business</TableHead>
-                {isStateAdmin ? null : <TableHead>State</TableHead>}
-                <TableHead>District</TableHead>
+                {isStateAdmin || isDistrictAdmin ? null : <TableHead>State</TableHead>}
+                {isDistrictAdmin ? null : <TableHead>District</TableHead>}
                 <TableHead>Submitted</TableHead>
               </TableRow>
             </TableHeader>
@@ -222,8 +240,8 @@ function AdminApplicationsList() {
                   </TableCell>
                   <TableCell>{labelFor(meta?.application_types, a.application_type)}</TableCell>
                   <TableCell>{a.organization_name}</TableCell>
-                  {isStateAdmin ? null : <TableCell>{a.state_code}</TableCell>}
-                  <TableCell>{a.district_code}</TableCell>
+                  {isStateAdmin || isDistrictAdmin ? null : <TableCell>{a.state_code}</TableCell>}
+                  {isDistrictAdmin ? null : <TableCell>{a.district_code}</TableCell>}
                   <TableCell className="text-sm">
                     {a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : "—"}
                   </TableCell>
@@ -268,7 +286,7 @@ function AdminApplicationsList() {
 
 export default function AdminApplicationsPage() {
   const { user } = useAuth();
-  if (!user || !["SUPER_ADMIN", "STATE_ADMIN"].includes(user.role)) {
+  if (!user || !["SUPER_ADMIN", "STATE_ADMIN", "DISTRICT_ADMIN"].includes(user.role)) {
     return <StateMessage title={NO_ACCESS} />;
   }
   return (

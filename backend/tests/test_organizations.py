@@ -148,6 +148,40 @@ def test_state_admin_cross_state_filter_is_empty_not_rejected(
     assert res.json()["items"] == []
 
 
+def test_district_admin_sees_only_own_district_gatc_orgs(client: TestClient, make_user) -> None:
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    dhn_gatc = make_user(Role.GATC, gatc_eligible_category_ids=[15])  # JH/DHN by default
+    rnc_gatc = make_user(
+        Role.GATC, gatc_eligible_category_ids=[15], org_district="RNC"
+    )  # same state, other district
+    ka_gatc = make_user(
+        Role.GATC, gatc_eligible_category_ids=[15], org_state="KA", org_district="BU"
+    )
+
+    res = client.get("/api/organizations?type=GATC", headers=auth_header(district_admin))
+    assert res.status_code == 200, res.text
+    ids = {o["id"] for o in res.json()["items"]}
+    assert ids == {str(dhn_gatc.organization_id)}
+    assert str(rnc_gatc.organization_id) not in ids
+    assert str(ka_gatc.organization_id) not in ids
+
+
+def test_district_admin_cross_district_filter_is_empty_not_rejected(
+    client: TestClient, make_user
+) -> None:
+    """Spec 21 §4: same organizations-vs-users asymmetry as spec 18's own state-level test —
+    scope_organizations() already floors every query to the caller's own district, so a
+    mismatched district_code filter just ANDs to an empty page here."""
+    district_admin = make_user(Role.DISTRICT_ADMIN)  # JH/DHN
+    make_user(Role.GATC, gatc_eligible_category_ids=[15])  # JH/DHN, would match with no filter
+
+    res = client.get(
+        "/api/organizations?type=GATC&district_code=RNC", headers=auth_header(district_admin)
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["items"] == []
+
+
 def test_pending_and_completed_case_counts(
     client: TestClient, make_user, make_instrument, make_application
 ) -> None:

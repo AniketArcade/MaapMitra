@@ -1,20 +1,20 @@
 "use client";
 
-import { ExpiryDashboard } from "@/components/admin/expiry-dashboard";
+import { DistrictAdminDashboard } from "@/components/admin/district-admin-dashboard";
 import { StateAdminDashboard } from "@/components/admin/state-admin-dashboard";
 import { SuperAdminDashboard } from "@/components/admin/super-admin-dashboard";
 import { NO_ACCESS, StateMessage } from "@/components/instruments/state-message";
 import { useAuth } from "@/lib/auth";
-import { ADMIN_ROLES } from "@/lib/types";
 
+// Spec 21: every ADMIN_ROLES member (SUPER_ADMIN, STATE_ADMIN, DISTRICT_ADMIN) now has its own
+// dashboard — the old generic ExpiryDashboard fallback this page used to end on is gone; it's
+// still reachable at /admin/certificates/expiring-soon for every admin role (and at
+// /certificates/expiring-soon for LM_OFFICER).
 export default function AdminPage() {
   const { user } = useAuth();
   if (!user) return null;
   if (user.role === "SUPER_ADMIN") return <SuperAdminDashboard />;
-  // Spec 18: STATE_ADMIN gets its own richer dashboard — checked before the generic ADMIN_ROLES
-  // fallback below, since STATE_ADMIN is also a member of that set. DISTRICT_ADMIN is the only
-  // role left falling through to the plain ExpiryDashboard now.
   if (user.role === "STATE_ADMIN") return <StateAdminDashboard />;
-  if (ADMIN_ROLES.includes(user.role)) return <ExpiryDashboard />;
+  if (user.role === "DISTRICT_ADMIN") return <DistrictAdminDashboard />;
   return <StateMessage title={NO_ACCESS} />;
 }
