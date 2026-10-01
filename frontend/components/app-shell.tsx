@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
-import { FileText, Gauge, LayoutDashboard, LogOut, ShieldCheck } from "lucide-react";
+import { FileText, Gauge, LayoutDashboard, LogOut, ShieldCheck, User } from "lucide-react";
 
 import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/instruments", label: "Instruments", icon: Gauge },
   { href: "/applications", label: "Applications", icon: FileText },
+  { href: "/profile", label: "Profile", icon: User },
 ];
 
 // UX guard only. The backend enforces every permission.
@@ -88,6 +89,15 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="flex items-center gap-2 border-b px-4 py-3 md:hidden">
           <SidebarTrigger />
           <BrandLogo iconClassName="size-5" textClassName="text-sm" />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ml-auto"
+            aria-label="Log out"
+            onClick={() => void logout()}
+          >
+            <LogOut className="size-4" aria-hidden="true" />
+          </Button>
         </header>
         <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">{children}</main>
       </SidebarInset>
