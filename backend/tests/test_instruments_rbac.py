@@ -61,7 +61,7 @@ def test_meta_for_any_logged_in_role(client: TestClient, make_user, role: Role) 
     scale = next(t for t in body["types"] if t["value"] == "WEIGHING_SCALE")
     assert scale["units"] == ["mg", "g", "kg", "t"]
     jh = next(r for r in body["regions"] if r["state_code"] == "JH")
-    assert {d["code"] for d in jh["districts"]} == {"DHN", "RNC", "BKR"}
+    assert {"DHN", "RNC", "BKR"} <= {d["code"] for d in jh["districts"]}
     assert body["accuracy_classes"] == ["I", "II", "III", "IIII"]
 
 

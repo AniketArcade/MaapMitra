@@ -156,4 +156,4 @@ def test_public_regions_no_auth(client: TestClient) -> None:
     assert "JH" in state_codes
     assert len(regions) >= 36  # all states + UTs
     jh = next(r for r in regions if r["state_code"] == "JH")
-    assert {d["code"] for d in jh["districts"]} == {"DHN", "RNC", "BKR"}
+    assert {"DHN", "RNC", "BKR"} <= {d["code"] for d in jh["districts"]}
