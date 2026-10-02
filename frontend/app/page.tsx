@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { BadgeCheck, CalendarClock, FilePlus2, QrCode, Store } from "lucide-react";
+import { ArrowRight, BadgeCheck, CalendarClock, FilePlus2, QrCode, ShieldCheck, Store } from "lucide-react";
 
 import { HeroIllustration } from "@/components/marketing/hero-illustration";
 import { SiteFooter } from "@/components/marketing/site-footer";
 import { SiteHeader } from "@/components/marketing/site-header";
 import { buttonVariants } from "@/components/ui/button";
+import { cn } from "cn";
 
 const STEPS = [
   {
@@ -30,29 +31,50 @@ export default function Home() {
       <SiteHeader />
 
       <main className="flex-1">
-        <section className="mx-auto grid w-full max-w-6xl gap-10 px-4 py-16 sm:py-20 lg:grid-cols-2 lg:items-center lg:gap-16">
-          <div className="grid gap-6">
-            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
-              Verification <span className="text-foreground">made</span>{" "}
-              <span className="text-success">clear.</span>
-            </h1>
-            <p className="max-w-md text-lg text-muted-foreground">
-              Manage instrument verification, certificates and validity with confidence.
-            </p>
-            <div className="flex flex-wrap items-center gap-5">
-              <Link href="/login" className={buttonVariants({ size: "lg" })}>
-                Merchant Login
-              </Link>
-              <Link
-                href="/how-it-works"
-                className="text-sm font-semibold text-primary underline-offset-4 hover:underline"
-              >
-                How it works →
-              </Link>
-            </div>
+        <section className="relative overflow-hidden">
+          <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+            <div className="absolute inset-0 bg-gradient-to-b from-success/10 via-success/5 to-transparent" />
+            <div className="absolute -top-32 -left-32 size-[28rem] rounded-full bg-success/15 blur-3xl" />
+            <div className="absolute top-1/3 -right-32 size-[24rem] rounded-full bg-success/10 blur-3xl" />
+            <div
+              className="absolute inset-0 opacity-[0.07]"
+              style={{
+                backgroundImage: "radial-gradient(currentColor 1px, transparent 1px)",
+                backgroundSize: "20px 20px",
+                color: "var(--success)",
+              }}
+            />
           </div>
 
-          <HeroIllustration />
+          <div className="mx-auto grid w-full max-w-6xl gap-10 px-4 py-16 sm:py-20 lg:grid-cols-2 lg:items-center lg:gap-16">
+            <div className="grid gap-6">
+              <span className="flex w-fit items-center gap-1.5 rounded-full bg-success/10 px-3 py-1 text-xs font-semibold tracking-wide text-success ring-1 ring-success/20">
+                <ShieldCheck className="size-3.5" aria-hidden="true" />
+                TRUSTED VERIFICATIONS
+              </span>
+              <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
+                Verification <span className="text-foreground">made</span>{" "}
+                <span className="text-success">clear.</span>
+              </h1>
+              <p className="max-w-md text-lg text-muted-foreground">
+                Manage instrument verification, certificates and validity with confidence.
+              </p>
+              <div className="flex flex-wrap items-center gap-5">
+                <Link href="/login" className={cn(buttonVariants({ size: "lg" }), "rounded-full gap-2")}>
+                  Merchant Login
+                  <ArrowRight className="size-4" aria-hidden="true" />
+                </Link>
+                <Link
+                  href="/how-it-works"
+                  className="text-sm font-semibold text-primary underline-offset-4 hover:underline"
+                >
+                  How it works →
+                </Link>
+              </div>
+            </div>
+
+            <HeroIllustration />
+          </div>
         </section>
 
         <section className="mx-auto grid w-full max-w-6xl gap-4 px-4 pb-16 sm:grid-cols-2">
