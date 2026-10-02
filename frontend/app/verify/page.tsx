@@ -2,34 +2,54 @@
 
 import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useCallback, useState, type FormEvent } from "react";
 
+import { QrScannerCard } from "@/components/verify/qr-scanner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { parseCertificateNumberFromScan } from "@/lib/qr";
 
 export default function VerifyLookupPage() {
   const router = useRouter();
   const [certificateNumber, setCertificateNumber] = useState("");
 
+  const goToCertificate = useCallback(
+    (raw: string) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return;
+      router.push(`/verify/${encodeURIComponent(trimmed)}`);
+    },
+    [router],
+  );
+
+  const handleDecode = useCallback(
+    (raw: string) => goToCertificate(parseCertificateNumberFromScan(raw)),
+    [goToCertificate],
+  );
+
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const trimmed = certificateNumber.trim();
-    if (!trimmed) return;
-    router.push(`/verify/${encodeURIComponent(trimmed)}`);
+    goToCertificate(certificateNumber);
   }
 
   return (
     <Card className="w-full max-w-sm">
       <CardHeader>
         <CardTitle className="text-xl">Verify a certificate</CardTitle>
-        <CardDescription>
-          Scan the QR code on a certificate with your phone&apos;s camera, or enter the certificate
-          number below.
-        </CardDescription>
+        <CardDescription>Point your camera at the QR code on a certificate.</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="grid gap-5">
+        <QrScannerCard onDecode={handleDecode} />
+
+        <div className="flex items-center gap-3">
+          <Separator className="flex-1" />
+          <span className="text-xs text-muted-foreground">or enter manually</span>
+          <Separator className="flex-1" />
+        </div>
+
         <form onSubmit={onSubmit} className="grid gap-4" noValidate>
           <div className="grid gap-2">
             <Label htmlFor="certificateNumber">Certificate number</Label>
