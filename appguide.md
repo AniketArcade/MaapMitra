@@ -12,8 +12,10 @@ Rules for the app live in `mobile/CLAUDE.md`; project rules in `CLAUDE.md`.
 - ✅ Web app + backend, all 21 specs done, 627 backend tests passing.
 - ✅ Backend mobile auth: send `X-Client: mobile` → refresh token comes back in the JSON body, no cookies
   (`backend/app/routers/auth.py`, tests in `backend/tests/test_auth_mobile.py`).
-- ⬜ Not yet: commit that change, shared API types, the `mobile/` app itself, password reset, account deletion,
-  store release.
+- ✅ Phase 0 done: pushed to `main`; work continues on `feat/mobile-app`.
+- ✅ Phase 1 done: production login with `X-Client: mobile` returns `refresh_token` in the body, no `Set-Cookie`,
+  logout 204. Client-IP decision: accept inexact IPs for the app path in the MVP (see `backend/CLAUDE.md`).
+- ⬜ Not yet: shared API types, the `mobile/` app itself, password reset, account deletion, store release.
 
 Each phase below ends with a **Done when** check. Don't start the next phase until it passes.
 Work on a branch per phase (`feat/...`) and keep PRs small.
