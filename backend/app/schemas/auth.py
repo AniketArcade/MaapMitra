@@ -37,8 +37,16 @@ class LoginRequest(StrictModel):
     password: SecretStr = Field(min_length=1, max_length=128)
 
 
+class RefreshRequest(StrictModel):
+    """Mobile clients (X-Client: mobile) send the refresh token in the body, not a cookie."""
+
+    refresh_token: str = Field(min_length=1, max_length=512)
+
+
 class AuthResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     expires_in: int
     user: UserOut
+    # Only set for X-Client: mobile. Web gets the refresh token as an httpOnly cookie instead.
+    refresh_token: str | None = None
