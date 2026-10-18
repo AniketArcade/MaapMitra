@@ -17,7 +17,7 @@ Physical verification stays a field activity. We digitize the workflow around it
 ├── CLAUDE.md          ← you are here (project-wide rules)
 ├── frontend/          ← Next.js web app        → frontend/CLAUDE.md
 ├── backend/           ← FastAPI service        → backend/CLAUDE.md
-├── mobile/            ← Expo React Native app (planned) → mobile/CLAUDE.md
+├── mobile/            ← Expo React Native app (scaffolded) → mobile/CLAUDE.md
 ├── database/seed/     ← demo seed data + accounts (README.md)
 ├── docs/specs/        ← one spec per feature (01–21): decisions, scope, out-of-scope lists
 └── .github/workflows/ ← daily expiry-check cron
@@ -69,6 +69,7 @@ Details: `docs/specs/NN-*.md`.
 
 **Done:** backend mobile auth (`X-Client: mobile` → refresh token in body, no cookies).
 **Done:** shared API types (`packages/api-types`, generated from OpenAPI; `npm run gen` after backend schema changes).
+**Done:** Expo app scaffolded in `mobile/` (placeholder screen).
 **Next:** Expo app (auth + shell → public QR verify →
 Merchant → Officer/GATC field inspection → officer certificates) → password reset + account deletion.
 

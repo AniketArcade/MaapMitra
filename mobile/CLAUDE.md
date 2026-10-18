@@ -1,7 +1,6 @@
 # Mobile — Expo (React Native)
 
-Project-wide rules are in `../CLAUDE.md`. **Status: planned, not scaffolded yet.** This file is the
-contract for when it is. It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
+Project-wide rules are in `../CLAUDE.md`. **Status: scaffolded (Expo SDK 58, expo-router, placeholder screen only).** Screens start in Phase 4 of `../appguide.md`. It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
 LM Officers (`LM_OFFICER`) and GATC test centres (`GATC`), against the same FastAPI backend as the web app.
 **Admin roles (DISTRICT/STATE/SUPER_ADMIN) are web-only**: if one logs in, sign out and say "Admin accounts are available on the website".
 
@@ -11,16 +10,22 @@ Expo SDK + TypeScript (strict) + expo-router. `expo-secure-store` (tokens), `exp
 inspection photos), `expo-image-picker` / `expo-image-manipulator` (compress), `expo-file-system` +
 `expo-sharing` (certificate PDF via signed URL). EAS Build for releases.
 
-## Commands (once scaffolded)
+## Commands
 
 ```bash
 cd mobile && npm install
 npx expo start               # Expo Go / simulator
-npx expo lint && npx tsc --noEmit
+npx expo lint && npm run typecheck
 eas build --profile preview
 ```
 
+## Layout
+
+`src/app/` expo-router routes, `@/*` -> `src/*`, `@api-types` -> `../packages/api-types` (types only; `metro.config.js` watches that folder). Native-only: no web target.
+
 ## Environment
+
+Copy `.env.example` to `.env` (gitignored). A phone can't reach `localhost`; run the backend with `uvicorn app.main:app --reload --host 0.0.0.0`.
 
 `EXPO_PUBLIC_API_ORIGIN=http://<lan-ip>:8000` locally, the Render URL in production. It is public by
 nature: **no secrets in the app bundle**, no Supabase keys, no direct Supabase calls.

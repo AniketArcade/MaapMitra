@@ -16,7 +16,8 @@ Rules for the app live in `mobile/CLAUDE.md`; project rules in `CLAUDE.md`.
 - ✅ Phase 1 done: production login with `X-Client: mobile` returns `refresh_token` in the body, no `Set-Cookie`,
   logout 204. Client-IP decision: accept inexact IPs for the app path in the MVP (see `backend/CLAUDE.md`).
 - ✅ Phase 2 done: `packages/api-types` (generated from OpenAPI), `frontend/lib/types.ts` re-exports it.
-- ⬜ Not yet: the `mobile/` app itself, password reset, account deletion, store release.
+- ✅ Phase 3 done: `mobile/` scaffolded (Expo SDK 58, strict TS, `@api-types` alias, iOS bundle builds).
+- ⬜ Not yet: app screens (Phase 4+), password reset, account deletion, store release.
 
 Each phase below ends with a **Done when** check. Don't start the next phase until it passes.
 Work on a branch per phase (`feat/...`) and keep PRs small.
