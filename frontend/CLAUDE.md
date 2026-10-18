@@ -40,6 +40,7 @@ frontend/
 
 ## Rules
 
+- **Types are generated:** `lib/types.ts` re-exports `packages/api-types` (from the backend OpenAPI schema; `@api-types` alias). After any backend schema change run `cd packages/api-types && npm run gen` and commit `openapi.json` + `schema.d.ts`; never hand-write API shapes.
 - **All data comes from FastAPI through `lib/api.ts`.** No Supabase/DB calls, no `fetch` scattered in components.
 - **Never aggregate paged data on the client.** Use a server stats endpoint (`GET /applications/stats`) or the list's `total`.
 - **Never hard-code** statuses, application/document types, instrument types, units, accuracy classes, regions, checklist items or measurement points. Load them via `getApplicationMeta()`, `getInstrumentMeta()`, `getInspectionMeta()` (cached, `lib/meta.ts`) and `labelFor()`. The pre-login register form uses `getPublicRegions()` (no auth).

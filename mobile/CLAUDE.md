@@ -29,7 +29,7 @@ nature: **no secrets in the app bundle**, no Supabase keys, no direct Supabase c
 
 - One typed API client (`lib/api.ts`), base URL = `EXPO_PUBLIC_API_ORIGIN`, always sends `X-Client: mobile`. No scattered `fetch`.
 - **Auth:** access token in memory; refresh token in `expo-secure-store` (returned in the JSON body for `X-Client: mobile`). Single-flight refresh; on 401 refresh once and retry, else go to login. Never log tokens, never put them in URLs or deep links.
-- Types come from the backend OpenAPI schema (generated), not hand-copied.
+- Types come from `../packages/api-types` (generated from the backend OpenAPI schema; regenerate with `npm run gen` there), not hand-copied.
 - **Never hard-code** statuses, types, units, regions, checklist items — load `/instruments/meta`, `/applications/meta`, `/inspections/meta`. Never re-derive `locked_fields`; action buttons come from `allowed_actions`; never aggregate paged data (use stats endpoints/`total`).
 - Role navigation mirrors `frontend/components/app-shell.tsx` (`NAV` for Merchant, `OFFICER_NAV`, `GATC_NAV`; no admin navs); it is UX only, the backend enforces. Handle 403/404 explicitly.
 - Every screen handles loading, empty, error and success. Scheduling "today" uses the backend timezone from `ApplicationMeta.scheduling`.

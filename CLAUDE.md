@@ -68,7 +68,8 @@ superseding → transportability → GATC → categories → Super/State/LMO/GAT
 Details: `docs/specs/NN-*.md`.
 
 **Done:** backend mobile auth (`X-Client: mobile` → refresh token in body, no cookies).
-**Next:** shared API types from OpenAPI → Expo app (auth + shell → public QR verify →
+**Done:** shared API types (`packages/api-types`, generated from OpenAPI; `npm run gen` after backend schema changes).
+**Next:** Expo app (auth + shell → public QR verify →
 Merchant → Officer/GATC field inspection → officer certificates) → password reset + account deletion.
 
 ## Demo story (seed data must support it)

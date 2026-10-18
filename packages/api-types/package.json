@@ -1,0 +1,14 @@
+{
+  "name": "@maapmitra/api-types",
+  "version": "0.0.0",
+  "private": true,
+  "types": "index.ts",
+  "scripts": {
+    "export:schema": "cd ../../backend && .venv/bin/python -c \"import json; from app.main import app; print(json.dumps(app.openapi(), indent=2, sort_keys=True))\" > ../packages/api-types/openapi.json",
+    "gen:types": "openapi-typescript openapi.json -o schema.d.ts",
+    "gen": "npm run export:schema && npm run gen:types"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.9.1"
+  }
+}

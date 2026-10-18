@@ -151,7 +151,7 @@ export function InstrumentForm({ mode, initial, onSaved }: Props) {
       // Keep dependent dropdowns consistent.
       if (key === "instrument_type") {
         const allowed = meta?.types.find((t) => t.value === value)?.units ?? [];
-        if (!allowed.includes(next.capacity_unit)) next.capacity_unit = "";
+        if (!(allowed as readonly string[]).includes(next.capacity_unit)) next.capacity_unit = "";
       }
       if (key === "state_code") {
         const allowed = meta?.regions.find((r) => r.state_code === value)?.districts ?? [];
