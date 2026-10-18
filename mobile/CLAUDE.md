@@ -21,7 +21,7 @@ eas build --profile preview
 
 ## Layout
 
-`src/app/` expo-router routes, `@/*` -> `src/*`, `@api-types` -> `../packages/api-types` (types only; `metro.config.js` watches that folder). Native-only: no web target.
+`src/app/` expo-router routes, `@/*` -> `src/*`, `@api-types` -> `../packages/api-types` (types only; `metro.config.js` watches that folder). Web (`w` in `expo start`) is a browser preview for layout only; camera, secure-store and sharing need a device.
 
 ## Environment
 
