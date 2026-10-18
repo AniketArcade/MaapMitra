@@ -1,7 +1,7 @@
 # MaapMitra — Legal Metrology Verification & Digital Certification Platform
 
 Portfolio/CV flagship. A digital lifecycle for Legal Metrology instrument verification, on web **and**
-a native mobile app, for every role:
+a native mobile app for the Public, Merchants, LM Officers and GATC test centres (admins stay web-only):
 
 ```
 Register instrument → Apply → Document review → Schedule → Field inspection
@@ -69,7 +69,7 @@ Details: `docs/specs/NN-*.md`.
 
 **Done:** backend mobile auth (`X-Client: mobile` → refresh token in body, no cookies).
 **Next:** shared API types from OpenAPI → Expo app (auth + shell → public QR verify →
-Business → Officer/GATC field inspection → admin dashboards) → password reset + account deletion.
+Merchant → Officer/GATC field inspection → officer certificates) → password reset + account deletion.
 
 ## Demo story (seed data must support it)
 

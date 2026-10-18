@@ -1,7 +1,10 @@
 # MaapMitra — App Guide (what to do next)
 
-Goal: a native Expo (React Native) app for **every role** (Business, LM Officer, GATC, District/State/Super
-Admin) plus anonymous QR verification, on the same FastAPI backend as the website.
+Goal: a native Expo (React Native) app for **four audiences only**: the **Public** (anonymous QR
+verification), **Merchants** (`BUSINESS` role), **LM Officers** (`LM_OFFICER`) and **GATC test centres**
+(`GATC`), on the same FastAPI backend as the website.
+**Admins (District / State / Super) are web-only**; no admin screens in the app. The backend still enforces
+every permission, so an admin who logs into the app just gets a "use the website" message.
 Rules for the app live in `mobile/CLAUDE.md`; project rules in `CLAUDE.md`.
 
 ## Where you are
@@ -96,14 +99,16 @@ Mirror `frontend/lib/api.ts` and `frontend/lib/auth.ts`:
    `POST /auth/refresh` with `{refresh_token}` to restore the session; on logout call `POST /auth/logout`
    with the body, then clear storage. Never log tokens.
 3. Screens: login, register (Business self-registration; officials use login only), loading splash.
-4. Role shell with expo-router: after login branch on `user.role` to a tab layout (mirror
-   `frontend/components/app-shell.tsx` navs): Business, Officer, GATC, and one admin layout for the three
-   admin ranks. This is UX only; the backend enforces everything.
+4. Role shell with expo-router: after login branch on `user.role` to a tab layout (mirror the `NAV`,
+   `OFFICER_NAV` and `GATC_NAV` lists in `frontend/components/app-shell.tsx`): **Merchant, LM Officer, GATC**.
+   For `SUPER_ADMIN` / `STATE_ADMIN` / `DISTRICT_ADMIN`, sign out and show "Admin accounts are available on
+   the website". This is UX only; the backend enforces everything. The Public needs no login: the QR verify
+   screen is reachable from the login screen.
 5. Load reference data via `/instruments/meta`, `/applications/meta`, `/inspections/meta` (cache in memory).
 
 Test accounts: `database/seed/README.md` (shared demo password, one account per role).
 
-**Done when:** you can log in as each seeded role, land on the right tabs, kill and reopen the app and stay
+**Done when:** you can log in as the seeded Merchant, Officer and GATC accounts, land on the right tabs, kill and reopen the app and stay
 logged in, and a 403/401 shows a clear message.
 
 ## Phase 5 — Public QR verify (½ day, great demo moment)
@@ -116,7 +121,7 @@ logged in, and a 403/401 shows a clear message.
 
 **Done when:** scanning the QR from a web-generated certificate PDF shows VALID in the app.
 
-## Phase 6 — Business flows (3–5 days)
+## Phase 6 — Merchant (Business) flows (3–5 days)
 
 In this order, each a thin screen over an existing endpoint:
 
@@ -147,14 +152,13 @@ In this order, each a thin screen over an existing endpoint:
 **Done when:** officer takes a scheduled inspection from SCHEDULED to CERTIFICATE_ISSUED on the phone, and a
 GATC user can complete an assigned inspection.
 
-## Phase 8 — Admin dashboards (read-mostly, 2–3 days)
+## Phase 8 — Officer extras: certificates and expiry (1 day)
 
-District/State/Super admin: KPI cards (`/admin/state-overview`, `/admin/district-overview`,
-`/admin/certificates/stats`), expiring-soon list, application and certificate lists, user list with
-Activate/Deactivate, audit-log viewer. Hide filters that the role's jurisdiction already fixes (see
-`frontend/CLAUDE.md` routes table). Skip account creation UI on mobile unless you want it.
+LM Officer and GATC certificate lists (`GET /certificates`, status filter, detail + PDF), and for LM Officers
+the expiring-soon view (`GET /admin/certificates/{stats,expiring-soon}` is open to `LM_OFFICER`, own district
+only). No admin dashboards in the app.
 
-**Done when:** each admin rank sees only its own jurisdiction's data.
+**Done when:** an officer can find a certificate they issued and open its PDF.
 
 ## Phase 9 — Store-readiness gaps (needs design decisions first)
 
