@@ -18,7 +18,8 @@ Rules for the app live in `mobile/CLAUDE.md`; project rules in `CLAUDE.md`.
 - ✅ Phase 2 done: `packages/api-types` (generated from OpenAPI), `frontend/lib/types.ts` re-exports it.
 - ✅ Phase 3 done: `mobile/` scaffolded (Expo SDK 58, strict TS, `@api-types` alias, iOS bundle builds).
 - ✅ Phase 4 done: API client, secure session restore, login/register, Merchant/Officer/GATC tab shell, admin block (verified on the Android emulator).
-- ⬜ Not yet: feature screens (Phases 5-8), password reset, account deletion, store release.
+- ✅ Phase 5 done: public QR verify (`app/verify.tsx`): camera scanner + manual entry, VALID/EXPIRED/SUPERSEDED/REVOKED badge, not-found/error states. Manual entry verified on the emulator; a real QR scan still needs a physical phone.
+- ⬜ Not yet: feature screens (Phases 6-8), password reset, account deletion, store release.
 
 Each phase below ends with a **Done when** check. Don't start the next phase until it passes.
 Work on a branch per phase (`feat/...`) and keep PRs small.
