@@ -72,7 +72,8 @@ Details: `docs/specs/NN-*.md`.
 **Done:** Expo app scaffolded in `mobile/`; auth + role shell (Phase 4).
 **Done:** public QR verify screen in the app (Phase 5).
 **Done:** Merchant flows in the app (Phase 6).
-**Next:** Officer/GATC field inspection → officer certificates in the app → password reset + account deletion.
+**Done:** Officer + GATC flows in the app (Phase 7): review, schedule, field inspection, approve/reject, issue certificate; certificate lists.
+**Next:** officer expiring-soon view → password reset + account deletion + min-app-version (Phase 9) → build/ship.
 
 ## Demo story (seed data must support it)
 

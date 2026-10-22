@@ -1,6 +1,6 @@
 # Mobile — Expo (React Native)
 
-Project-wide rules are in `../CLAUDE.md`. **Status: auth + role shell done** (login/register, persisted session, Merchant/Officer/GATC tabs with placeholder screens). Public QR verify (Phase 5) and Merchant flows (Phase 6) done; Officer/GATC screens follow in `../appguide.md` Phases 7-8. It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
+Project-wide rules are in `../CLAUDE.md`. **Status: auth + role shell done** (login/register, persisted session, Merchant/Officer/GATC tabs with placeholder screens). Public QR verify (5), Merchant (6) and Officer/GATC (7) flows done; remaining: officer expiring-soon and store-readiness (`../appguide.md` Phases 8-10). It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
 LM Officers (`LM_OFFICER`) and GATC test centres (`GATC`), against the same FastAPI backend as the web app.
 **Admin roles (DISTRICT/STATE/SUPER_ADMIN) are web-only**: if one logs in, sign out and say "Admin accounts are available on the website".
 
@@ -52,6 +52,7 @@ nature: **no secrets in the app bundle**, no Supabase keys, no direct Supabase c
 - **Auth:** access token in memory; refresh token in `expo-secure-store` (returned in the JSON body for `X-Client: mobile`). Single-flight refresh; on 401 refresh once and retry, else go to login. Never log tokens, never put them in URLs or deep links.
 - Types come from `../packages/api-types` (generated from the backend OpenAPI schema; regenerate with `npm run gen` there), not hand-copied.
 - **Never hard-code** statuses, types, units, regions, checklist items — load `/instruments/meta`, `/applications/meta`, `/inspections/meta`. Never re-derive `locked_fields`; action buttons come from `allowed_actions`; never aggregate paged data (use stats endpoints/`total`).
+- Issue certificate is officer-only and gated on `status === "APPROVED"` (the one exception to `allowed_actions`); GATC never schedules, reviews or issues.
 - Role navigation mirrors `frontend/components/app-shell.tsx` (`NAV` for Merchant, `OFFICER_NAV`, `GATC_NAV`; no admin navs); it is UX only, the backend enforces. Handle 403/404 explicitly.
 - Instrument categories (spec 16, optional) are not in the app: create sends flat fields only, edit never touches `category_id`/`category_values` (edit on the website).
 - Every screen handles loading, empty, error and success. Scheduling "today" uses the backend timezone from `ApplicationMeta.scheduling`.

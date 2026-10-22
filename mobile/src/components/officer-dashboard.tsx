@@ -21,7 +21,7 @@ const OFFICER_BUCKETS: Bucket[] = [
   { status: "INSPECTION", title: "Inspections in progress", hint: "Continue inspection", sort: "scheduled_asc" },
 ];
 
-function BucketSection({ bucket }: { bucket: Bucket }) {
+export function BucketSection({ bucket }: { bucket: Bucket }) {
   const sort = bucket.sort ? `&sort=${bucket.sort}` : "";
   const state = useAsync(() =>
     api<Page<Application>>(`/applications?status=${bucket.status}${sort}&page_size=5`),
@@ -101,6 +101,53 @@ export function OfficerDashboard() {
       </Section>
 
       {OFFICER_BUCKETS.map((b) => (
+        <BucketSection key={b.status} bucket={b} />
+      ))}
+    </Screen>
+  );
+}
+
+// GATC only ever sees what an officer routed to it: never SUBMITTED / DOCUMENT_REVIEW, and no
+// instrument access (spec 20).
+const GATC_BUCKETS: Bucket[] = [
+  { status: "SCHEDULED", title: "Assigned inspections", hint: "Start verification", sort: "scheduled_asc" },
+  { status: "INSPECTION", title: "Inspections in progress", hint: "Continue inspection", sort: "scheduled_asc" },
+];
+
+export function GatcDashboard() {
+  const { user } = useAuth();
+  const stats = useAsync(() => api<ApplicationStats>("/applications/stats"));
+  const meta = useAsync(getApplicationMeta);
+
+  return (
+    <Screen>
+      <Title>GATC dashboard</Title>
+      <Muted>{user?.organization_name}</Muted>
+
+      <Section title="Applications" state={stats} errorMessage="Couldn't load application stats.">
+        {({ total, by_status }) =>
+          total === 0 ? (
+            <Muted>No applications assigned yet.</Muted>
+          ) : (
+            <View style={{ gap: 8 }}>
+              <Text style={{ color: colors.text }}>
+                {total} application{total === 1 ? "" : "s"}
+              </Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {(meta.data?.statuses ?? [])
+                  .filter((s) => by_status[s.value])
+                  .map((s) => (
+                    <Chip key={s.value}>
+                      {by_status[s.value]} {s.label}
+                    </Chip>
+                  ))}
+              </View>
+            </View>
+          )
+        }
+      </Section>
+
+      {GATC_BUCKETS.map((b) => (
         <BucketSection key={b.status} bucket={b} />
       ))}
     </Screen>

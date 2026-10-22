@@ -42,7 +42,7 @@ export function ApplicationScreen() {
   const [payBusy, setPayBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<string | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState<"schedule" | "reschedule" | null>(null);
-  const [noteFor, setNoteFor] = useState<"DOCUMENTS_DEFICIENT" | "REJECTED" | null>(null);
+  const [noteFor, setNoteFor] = useState<"DOCUMENTS_DEFICIENT" | "REJECTED" | "APPROVED" | null>(null);
 
   const app = override && state.data && override.id === state.data.id ? override : state.data;
 
@@ -58,6 +58,9 @@ export function ApplicationScreen() {
   const isInspector = isOfficer || user?.role === "GATC"; // same inspection machinery; only officers schedule/review
   const editable = isOwner && app.status === "DRAFT";
   const canSubmit = app.allowed_actions.includes("SUBMITTED");
+  // APPROVED -> CERTIFICATE_ISSUED is system-only in the backend (never an allowed_actions edge), so
+  // this is the one documented exception to "buttons come only from allowed_actions" (see CLAUDE.md).
+  const canIssueCertificate = app.status === "APPROVED" && isOfficer;
   // The server doesn't guarantee row order after updates; keep the template order from /meta so
   // rows never jump around while the officer ticks them off.
   const templateOrder = meta.data?.document_review_checklist.map((i) => i.key) ?? [];
@@ -181,6 +184,18 @@ export function ApplicationScreen() {
     }
   }
 
+  async function issueCertificate() {
+    setBusy(true);
+    setActionError(null);
+    try {
+      setOverride(await api<ApplicationDetail>(`/applications/${app!.id}/certificate`, { method: "POST" }));
+    } catch (err) {
+      setActionError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function reschedule(scheduledDate: string) {
     setBusy(true);
     setActionError(null);
@@ -261,7 +276,7 @@ export function ApplicationScreen() {
         </View>
       ) : null}
 
-      {isInspector && (app.allowed_actions.length > 0 || app.inspection || app.can_reschedule) ? (
+      {isInspector && (app.allowed_actions.length > 0 || app.inspection || app.can_reschedule || canIssueCertificate) ? (
         <View style={{ gap: 8 }}>
           {isOfficer && app.allowed_actions.includes("SCHEDULED") ? (
             <View style={{ gap: 6 }}>
@@ -303,9 +318,13 @@ export function ApplicationScreen() {
           {app.allowed_actions.includes("DOCUMENTS_DEFICIENT") ? (
             <Button label="Send back (documents deficient)" variant="secondary" onPress={() => setNoteFor("DOCUMENTS_DEFICIENT")} disabled={busy} />
           ) : null}
+          {app.allowed_actions.includes("APPROVED") ? (
+            <Button label="Approve" onPress={() => setNoteFor("APPROVED")} disabled={busy} />
+          ) : null}
           {app.allowed_actions.includes("REJECTED") ? (
             <Button label="Reject" variant="secondary" onPress={() => setNoteFor("REJECTED")} disabled={busy} />
           ) : null}
+          {canIssueCertificate ? <Button label="Issue certificate" onPress={() => void issueCertificate()} loading={busy} /> : null}
         </View>
       ) : null}
 
@@ -439,18 +458,26 @@ export function ApplicationScreen() {
       <NoteDialog
         key={noteFor ?? "closed"}
         visible={noteFor !== null}
-        title={noteFor === "REJECTED" ? "Reject this application?" : "Send back as documents deficient?"}
+        title={
+          noteFor === "REJECTED"
+            ? "Reject this application?"
+            : noteFor === "APPROVED"
+              ? "Approve this application?"
+              : "Send back as documents deficient?"
+        }
         description={
           noteFor === "REJECTED"
             ? "The business will see your reason and must re-apply."
-            : "This doesn't reject the application: the business can fix the issue and resubmit."
+            : noteFor === "APPROVED"
+              ? "The instrument stays location-locked until the certificate is issued."
+              : "This doesn't reject the application: the business can fix the issue and resubmit."
         }
-        label={noteFor === "REJECTED" ? "Reason" : "What's missing or wrong"}
-        minLength={NOTE_MIN}
-        confirmLabel={noteFor === "REJECTED" ? "Reject" : "Send back"}
+        label={noteFor === "REJECTED" ? "Reason" : noteFor === "APPROVED" ? "Note (optional)" : "What's missing or wrong"}
+        minLength={noteFor === "APPROVED" ? 0 : NOTE_MIN}
+        confirmLabel={noteFor === "REJECTED" ? "Reject" : noteFor === "APPROVED" ? "Approve" : "Send back"}
         destructive={noteFor === "REJECTED"}
         busy={busy}
-        onConfirm={(note) => void changeStatus(noteFor!, { note })}
+        onConfirm={(note) => void changeStatus(noteFor!, note ? { note } : {})}
         onClose={() => setNoteFor(null)}
       />
 

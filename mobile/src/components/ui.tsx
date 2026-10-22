@@ -235,9 +235,11 @@ export function NoteDialog({
               maxLength={1000}
               style={{ minHeight: 96, textAlignVertical: "top", paddingTop: 12 }}
             />
-            <Text style={styles.muted}>
-              At least {minLength} characters ({trimmed.length}/{minLength}+).
-            </Text>
+            {minLength > 0 ? (
+              <Text style={styles.muted}>
+                At least {minLength} characters ({trimmed.length}/{minLength}+).
+              </Text>
+            ) : null}
             <Button
               label={confirmLabel}
               onPress={() => onConfirm(trimmed)}
