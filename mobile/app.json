@@ -39,7 +39,8 @@
         {
           "photosPermission": "MaapMitra needs photo access to attach documents to your application."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true

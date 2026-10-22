@@ -98,6 +98,7 @@ export function Button({
 export function TextField({
   label,
   error,
+  style,
   ...input
 }: { label: string; error?: string } & TextInputProps) {
   return (
@@ -105,7 +106,7 @@ export function TextField({
       <Text style={styles.label}>{label}</Text>
       <TextInput
         placeholderTextColor={colors.muted}
-        style={[styles.input, error ? styles.inputError : null, input.editable === false && { opacity: 0.5 }]}
+        style={[styles.input, error ? styles.inputError : null, input.editable === false && { opacity: 0.5 }, style]}
         {...input}
       />
       {error ? <Text style={styles.errorText}>{error}</Text> : null}

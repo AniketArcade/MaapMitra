@@ -1,8 +1,9 @@
 import type { ApplicationDetail, DocumentOut } from "@api-types";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Alert, Linking, StyleSheet, Text, View } from "react-native";
 
+import { ScheduleDialog } from "@/components/schedule-dialog";
 import { StatusBadge } from "@/components/status-badge";
 import { Button, ChoiceModal, ErrorState, ErrorText, InfoText, Loading, Muted, NoteDialog, Screen, Title } from "@/components/ui";
 import { ApiError, api, describeError } from "@/lib/api";
@@ -40,6 +41,7 @@ export function ApplicationScreen() {
   const [busy, setBusy] = useState(false);
   const [payBusy, setPayBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<string | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState<"schedule" | "reschedule" | null>(null);
   const [noteFor, setNoteFor] = useState<"DOCUMENTS_DEFICIENT" | "REJECTED" | null>(null);
 
   const app = override && state.data && override.id === state.data.id ? override : state.data;
@@ -53,8 +55,17 @@ export function ApplicationScreen() {
 
   const isOwner = user?.role === "BUSINESS";
   const isOfficer = user?.role === "LM_OFFICER";
+  const isInspector = isOfficer || user?.role === "GATC"; // same inspection machinery; only officers schedule/review
   const editable = isOwner && app.status === "DRAFT";
   const canSubmit = app.allowed_actions.includes("SUBMITTED");
+  // The server doesn't guarantee row order after updates; keep the template order from /meta so
+  // rows never jump around while the officer ticks them off.
+  const templateOrder = meta.data?.document_review_checklist.map((i) => i.key) ?? [];
+  const reviewItems = [...app.review_checklist].sort(
+    (a, b) => templateOrder.indexOf(a.item_key) - templateOrder.indexOf(b.item_key),
+  );
+  // The backend is the authority (409 until every review item is checked); this just explains why.
+  const reviewChecklistComplete = app.review_checklist.every((i) => i.checked);
   const requirementsMet = app.requirements.every((r) => !r.required || r.satisfied);
   const limits = meta.data?.limits;
   const atLimit = limits ? app.documents.length >= limits.max_documents : false;
@@ -145,6 +156,42 @@ export function ApplicationScreen() {
       });
       setOverride(updated);
       setNoteFor(null);
+      setScheduleOpen(null);
+    } catch (err) {
+      setActionError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startInspection() {
+    setBusy(true);
+    setActionError(null);
+    try {
+      const updated = await api<ApplicationDetail>(`/applications/${app!.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "INSPECTION" }),
+      });
+      setOverride(updated);
+      if (updated.inspection) router.push({ pathname: "/inspection/[id]", params: { id: updated.inspection.id } });
+    } catch (err) {
+      setActionError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reschedule(scheduledDate: string) {
+    setBusy(true);
+    setActionError(null);
+    try {
+      setOverride(
+        await api<ApplicationDetail>(`/applications/${app!.id}/inspection`, {
+          method: "PATCH",
+          body: JSON.stringify({ scheduled_date: scheduledDate }),
+        }),
+      );
+      setScheduleOpen(null);
     } catch (err) {
       setActionError(describeError(err));
     } finally {
@@ -214,8 +261,42 @@ export function ApplicationScreen() {
         </View>
       ) : null}
 
-      {isOfficer && app.allowed_actions.length > 0 ? (
+      {isInspector && (app.allowed_actions.length > 0 || app.inspection || app.can_reschedule) ? (
         <View style={{ gap: 8 }}>
+          {isOfficer && app.allowed_actions.includes("SCHEDULED") ? (
+            <View style={{ gap: 6 }}>
+              <Button
+                label="Schedule inspection"
+                onPress={() => {
+                  setActionError(null);
+                  setScheduleOpen("schedule");
+                }}
+                disabled={!reviewChecklistComplete || busy}
+              />
+              {!reviewChecklistComplete ? <Muted>Check off every document review item before scheduling.</Muted> : null}
+            </View>
+          ) : null}
+          {isOfficer && app.can_reschedule ? (
+            <Button
+              label="Change inspection date"
+              variant="secondary"
+              onPress={() => {
+                setActionError(null);
+                setScheduleOpen("reschedule");
+              }}
+              disabled={busy}
+            />
+          ) : null}
+          {app.allowed_actions.includes("INSPECTION") ? (
+            <Button label="Start inspection" onPress={() => void startInspection()} loading={busy} />
+          ) : null}
+          {app.inspection && app.status !== "SCHEDULED" ? (
+            <Button
+              label={app.status === "INSPECTION" && !app.inspection.submitted_at ? "Continue inspection" : "View inspection"}
+              variant={app.status === "INSPECTION" && !app.inspection.submitted_at ? "primary" : "secondary"}
+              onPress={() => router.push({ pathname: "/inspection/[id]", params: { id: app.inspection!.id } })}
+            />
+          ) : null}
           {app.allowed_actions.includes("DOCUMENT_REVIEW") ? (
             <Button label="Start review" onPress={() => void changeStatus("DOCUMENT_REVIEW")} loading={busy} />
           ) : null}
@@ -271,10 +352,10 @@ export function ApplicationScreen() {
         {editable && atLimit ? <Muted>Document limit reached ({limits?.max_documents}).</Muted> : null}
       </View>
 
-      {app.review_checklist.length > 0 ? (
+      {reviewItems.length > 0 ? (
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Document review checklist</Text>
-          {app.review_checklist.map((item) =>
+          {reviewItems.map((item) =>
             app.status === "DOCUMENT_REVIEW" && isOfficer ? (
               <Text
                 key={item.item_key}
@@ -340,7 +421,23 @@ export function ApplicationScreen() {
         ))}
       </View>
 
+      {scheduleOpen && meta.data ? (
+        <ScheduleDialog
+          key={scheduleOpen}
+          visible
+          app={app}
+          timezone={meta.data.scheduling.timezone}
+          maxDaysAhead={meta.data.scheduling.max_days_ahead}
+          reschedule={scheduleOpen === "reschedule"}
+          busy={busy}
+          error={actionError}
+          onConfirm={(body) => (scheduleOpen === "reschedule" ? void reschedule(body.scheduled_date) : void changeStatus("SCHEDULED", body))}
+          onClose={() => setScheduleOpen(null)}
+        />
+      ) : null}
+
       <NoteDialog
+        key={noteFor ?? "closed"}
         visible={noteFor !== null}
         title={noteFor === "REJECTED" ? "Reject this application?" : "Send back as documents deficient?"}
         description={

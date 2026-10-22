@@ -32,6 +32,10 @@ function RootStack() {
       <Stack.Protected guard={role === "GATC"}>
         <Stack.Screen name="(gatc)" />
       </Stack.Protected>
+      {/* Field inspection: full screen (no tabs), for the roles that inspect. */}
+      <Stack.Protected guard={role === "LM_OFFICER" || role === "GATC"}>
+        <Stack.Screen name="inspection/[id]" options={{ headerShown: true, title: "Field inspection" }} />
+      </Stack.Protected>
       {/* Public: reachable signed in or out (QR verification needs no login). */}
       <Stack.Screen name="verify" options={{ headerShown: true, title: "Verify a certificate" }} />
     </Stack>

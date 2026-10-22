@@ -23,7 +23,7 @@ eas build --profile preview
 
 ```text
 src/lib/        certificates (open/share PDF via signed URL), use-async (fetch + refetch on focus), use-paged-list (server paging + filters), upload (pick/compress/upload), nav (openInTab), qr (parse scanned URL/number), verify (public verify call + date format), config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
-src/components/ application-list/application-screen/application-row (shared by roles), officer-dashboard, instrument-list/instrument-detail (`canManage` for Business only), certificate-list/certificate-view (shared by all roles), instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
+src/components/ inspection-screen (field flow, root route `/inspection/[id]`), schedule-dialog, application-list/application-screen/application-row (shared by roles), officer-dashboard, instrument-list/instrument-detail (`canManage` for Business only), certificate-list/certificate-view (shared by all roles), instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
 src/app/        _layout (AuthProvider + Stack.Protected by role), (auth)/ index=login + register, verify (public),
                 (merchant)/ (officer)/ (gatc)/ tab layouts; officer extras live in the nested stack (officer)/more/
 ```
@@ -59,5 +59,6 @@ nature: **no secrets in the app bundle**, no Supabase keys, no direct Supabase c
 - **Cross-tab navigation:** push into another tab's stack with `openInTab(href)` (`withAnchor`) and give that stack's `_layout` `unstable_settings = { anchor: "index" }`, otherwise the detail is the only screen and Back has nowhere to go.
 - Documents/certificates open through short-lived signed URLs from the API (`/documents/{id}/url`, `/certificates/{id}/pdf`); never cache or store the URL. Certificate PDFs: `Linking.openURL` to view, `File.downloadFileAsync` + `expo-sharing` to share/save. Merchants get a Certificates tab (the API scopes the list to their org) though the web only links certificates from applications.
 - Public QR verify needs no login and shows only what `/public/verify/{certificate_number}` returns; the QR encodes `{PUBLIC_BASE_URL}/verify/{certificate_number}`, so parse the trailing number.
+- Never type into the emulator with `adb input text` unless a text field is focused: unfocused keystrokes act as dev shortcuts (`R R` reloads, `d` opens the dev menu).
 - Inspection flow is one step per screen with a sticky action button; PATCH each step before advancing; confirm before the irreversible Submit.
 - Deferred until asked: push notifications, offline queue, biometric lock.
