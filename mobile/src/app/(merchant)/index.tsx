@@ -1,6 +1,7 @@
 import type { Application, ApplicationStats, Instrument, Page } from "@api-types";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 
+import { ApplicationRow } from "@/components/application-row";
 import { Chip, Section } from "@/components/section";
 import { Button, Muted, Screen, Title } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -9,20 +10,6 @@ import { openInTab } from "@/lib/nav";
 import { getApplicationMeta, labelFor } from "@/lib/meta";
 import { colors } from "@/lib/theme";
 import { useAsync } from "@/lib/use-async";
-
-function ApplicationRow({ a, statusLabel }: { a: Application; statusLabel: string }) {
-  return (
-    <Pressable
-      onPress={() => openInTab({ pathname: "/applications/[id]", params: { id: a.id } })}
-      style={{ gap: 2 }}
-    >
-      <Text style={{ fontWeight: "600", color: colors.text }}>{a.application_number}</Text>
-      <Muted>
-        {statusLabel} · {a.instrument.manufacturer} {a.instrument.model} · S/N {a.instrument.serial_number}
-      </Muted>
-    </Pressable>
-  );
-}
 
 export default function MerchantDashboard() {
   const { user } = useAuth();

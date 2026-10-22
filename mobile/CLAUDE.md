@@ -23,7 +23,7 @@ eas build --profile preview
 
 ```text
 src/lib/        certificates (open/share PDF via signed URL), use-async (fetch + refetch on focus), use-paged-list (server paging + filters), upload (pick/compress/upload), nav (openInTab), qr (parse scanned URL/number), verify (public verify call + date format), config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
-src/components/ certificate-list/certificate-view (shared by all roles), instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
+src/components/ application-list/application-screen/application-row (shared by roles), officer-dashboard, instrument-list/instrument-detail (`canManage` for Business only), certificate-list/certificate-view (shared by all roles), instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
 src/app/        _layout (AuthProvider + Stack.Protected by role), (auth)/ index=login + register, verify (public),
                 (merchant)/ (officer)/ (gatc)/ tab layouts; officer extras live in the nested stack (officer)/more/
 ```

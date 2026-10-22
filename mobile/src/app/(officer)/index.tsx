@@ -1,3 +1,3 @@
-import { DashboardPlaceholder } from "@/components/placeholder";
+import { OfficerDashboard } from "@/components/officer-dashboard";
 
-export default DashboardPlaceholder;
+export default OfficerDashboard;

@@ -9,7 +9,8 @@ export default function MoreStack() {
   return (
     <Stack>
       <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="instruments" options={{ title: "Instruments" }} />
+      <Stack.Screen name="instruments/index" options={{ title: "Instruments" }} />
+      <Stack.Screen name="instruments/[id]" options={{ title: "Instrument" }} />
       <Stack.Screen name="expiring-soon" options={{ title: "Expiring soon" }} />
       <Stack.Screen name="profile" options={{ title: "Profile" }} />
     </Stack>

@@ -193,6 +193,65 @@ export function ChoiceModal({
   );
 }
 
+/** Modal asking for a required free-text note (reasons for send-back / reject). */
+export function NoteDialog({
+  visible,
+  title,
+  description,
+  label,
+  minLength,
+  confirmLabel,
+  busy,
+  destructive = false,
+  onConfirm,
+  onClose,
+}: {
+  visible: boolean;
+  title: string;
+  description: string;
+  label: string;
+  minLength: number;
+  confirmLabel: string;
+  busy: boolean;
+  destructive?: boolean;
+  onConfirm: (note: string) => void;
+  onClose: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const trimmed = note.trim();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.backdrop}>
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1, justifyContent: "flex-end" }}>
+          <View style={[styles.sheet, { padding: 16, gap: 12 }]}>
+            <Text style={styles.title}>{title}</Text>
+            <Text style={styles.muted}>{description}</Text>
+            <TextField
+              label={label}
+              value={note}
+              onChangeText={setNote}
+              multiline
+              maxLength={1000}
+              style={{ minHeight: 96, textAlignVertical: "top", paddingTop: 12 }}
+            />
+            <Text style={styles.muted}>
+              At least {minLength} characters ({trimmed.length}/{minLength}+).
+            </Text>
+            <Button
+              label={confirmLabel}
+              onPress={() => onConfirm(trimmed)}
+              loading={busy}
+              disabled={trimmed.length < minLength}
+            />
+            <Button label="Cancel" variant="secondary" onPress={onClose} disabled={busy} />
+            {destructive ? <Text style={styles.muted}>This can&apos;t be undone.</Text> : null}
+          </View>
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 /** Modal list picker (state/district etc.). Options always come from the backend /meta data. */
 export function Select({
   label,
