@@ -17,7 +17,8 @@ Rules for the app live in `mobile/CLAUDE.md`; project rules in `CLAUDE.md`.
   logout 204. Client-IP decision: accept inexact IPs for the app path in the MVP (see `backend/CLAUDE.md`).
 - ✅ Phase 2 done: `packages/api-types` (generated from OpenAPI), `frontend/lib/types.ts` re-exports it.
 - ✅ Phase 3 done: `mobile/` scaffolded (Expo SDK 58, strict TS, `@api-types` alias, iOS bundle builds).
-- ⬜ Not yet: app screens (Phase 4+), password reset, account deletion, store release.
+- ✅ Phase 4 done: API client, secure session restore, login/register, Merchant/Officer/GATC tab shell, admin block (verified on the Android emulator).
+- ⬜ Not yet: feature screens (Phases 5-8), password reset, account deletion, store release.
 
 Each phase below ends with a **Done when** check. Don't start the next phase until it passes.
 Work on a branch per phase (`feat/...`) and keep PRs small.

@@ -1,6 +1,6 @@
 # Mobile — Expo (React Native)
 
-Project-wide rules are in `../CLAUDE.md`. **Status: scaffolded (Expo SDK 58, expo-router, placeholder screen only).** Screens start in Phase 4 of `../appguide.md`. It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
+Project-wide rules are in `../CLAUDE.md`. **Status: auth + role shell done** (login/register, persisted session, Merchant/Officer/GATC tabs with placeholder screens). Feature screens follow in `../appguide.md` Phases 5-8. It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
 LM Officers (`LM_OFFICER`) and GATC test centres (`GATC`), against the same FastAPI backend as the web app.
 **Admin roles (DISTRICT/STATE/SUPER_ADMIN) are web-only**: if one logs in, sign out and say "Admin accounts are available on the website".
 
@@ -21,11 +21,27 @@ eas build --profile preview
 
 ## Layout
 
+```text
+src/lib/        config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
+src/components/ ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
+src/app/        _layout (AuthProvider + Stack.Protected by role), (auth)/ index=login + register, verify (public),
+                (merchant)/ (officer)/ (gatc)/ tab layouts; officer extras live in the nested stack (officer)/more/
+```
+
+Routing gotchas: groups share URL space, so a path like `/instruments` is ambiguous between roles; give role-only screens unique paths (e.g. `/more/instruments`). The signed-out `/` must exist (`(auth)/index` is the login screen).
+
 `src/app/` expo-router routes, `@/*` -> `src/*`, `@api-types` -> `../packages/api-types` (types only; `metro.config.js` watches that folder). Web (`w` in `expo start`) is a browser preview for layout only; camera, secure-store and sharing need a device.
 
 ## Environment
 
-Copy `.env.example` to `.env` (gitignored). A phone can't reach `localhost`; run the backend with `uvicorn app.main:app --reload --host 0.0.0.0`.
+Copy `.env.example` to `.env` (gitignored). A phone can't reach `localhost`; run the backend with `--host 0.0.0.0`. **Android emulator: `EXPO_PUBLIC_API_ORIGIN=http://10.0.2.2:8000`** (iOS simulator: `http://localhost:8000`; real phone: the Mac's LAN IP).
+
+Local test backend (demo accounts exist only locally; production has admin accounts only):
+```bash
+cd backend && source .venv/bin/activate
+DATABASE_URL=postgresql+psycopg://localhost/lm_dev STORAGE_BACKEND=memory ENV=development uvicorn app.main:app --host 0.0.0.0
+```
+Accounts (password `LmDemo@2026`): `owner@abctraders.demo` (Merchant), `officer.dhn@lm.demo`, `gatc.dhn@lm.demo`, `state.jh@lm.demo` (admin -> blocked in the app).
 
 `EXPO_PUBLIC_API_ORIGIN=http://<lan-ip>:8000` locally, the Render URL in production. It is public by
 nature: **no secrets in the app bundle**, no Supabase keys, no direct Supabase calls.
