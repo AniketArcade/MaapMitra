@@ -71,8 +71,8 @@ Details: `docs/specs/NN-*.md`.
 **Done:** shared API types (`packages/api-types`, generated from OpenAPI; `npm run gen` after backend schema changes).
 **Done:** Expo app scaffolded in `mobile/`; auth + role shell (Phase 4).
 **Done:** public QR verify screen in the app (Phase 5).
-**Next:** Expo app (
-Merchant → Officer/GATC field inspection → officer certificates) → password reset + account deletion.
+**Done:** Merchant flows in the app (Phase 6).
+**Next:** Officer/GATC field inspection → officer certificates in the app → password reset + account deletion.
 
 ## Demo story (seed data must support it)
 

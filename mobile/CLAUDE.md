@@ -1,6 +1,6 @@
 # Mobile — Expo (React Native)
 
-Project-wide rules are in `../CLAUDE.md`. **Status: auth + role shell done** (login/register, persisted session, Merchant/Officer/GATC tabs with placeholder screens). Public QR verify done (Phase 5); Merchant/Officer/GATC feature screens follow in `../appguide.md` Phases 6-8. It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
+Project-wide rules are in `../CLAUDE.md`. **Status: auth + role shell done** (login/register, persisted session, Merchant/Officer/GATC tabs with placeholder screens). Public QR verify (Phase 5) and Merchant flows (Phase 6) done; Officer/GATC screens follow in `../appguide.md` Phases 7-8. It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
 LM Officers (`LM_OFFICER`) and GATC test centres (`GATC`), against the same FastAPI backend as the web app.
 **Admin roles (DISTRICT/STATE/SUPER_ADMIN) are web-only**: if one logs in, sign out and say "Admin accounts are available on the website".
 
@@ -22,8 +22,8 @@ eas build --profile preview
 ## Layout
 
 ```text
-src/lib/        use-async (fetch + refetch on focus), use-paged-list (server paging + filters), upload (pick/compress/upload), nav (openInTab), qr (parse scanned URL/number), verify (public verify call + date format), config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
-src/components/ instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
+src/lib/        certificates (open/share PDF via signed URL), use-async (fetch + refetch on focus), use-paged-list (server paging + filters), upload (pick/compress/upload), nav (openInTab), qr (parse scanned URL/number), verify (public verify call + date format), config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
+src/components/ certificate-list/certificate-view (shared by all roles), instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
 src/app/        _layout (AuthProvider + Stack.Protected by role), (auth)/ index=login + register, verify (public),
                 (merchant)/ (officer)/ (gatc)/ tab layouts; officer extras live in the nested stack (officer)/more/
 ```
@@ -57,7 +57,7 @@ nature: **no secrets in the app bundle**, no Supabase keys, no direct Supabase c
 - Every screen handles loading, empty, error and success. Scheduling "today" uses the backend timezone from `ApplicationMeta.scheduling`.
 - **Uploads:** `lib/upload.ts` resizes photos (long edge 2000 px, JPEG 0.7) before `POST /documents` (PDF/JPG/PNG only). Multipart bodies must use `new File(uri)` from `expo-file-system` (a Blob); the old `{uri, name, type}` descriptor fails with "Unsupported FormDataPart". Inspection photos use `document_type: "INSPECTION_EVIDENCE"`.
 - **Cross-tab navigation:** push into another tab's stack with `openInTab(href)` (`withAnchor`) and give that stack's `_layout` `unstable_settings = { anchor: "index" }`, otherwise the detail is the only screen and Back has nowhere to go.
-- Documents/certificates open through short-lived signed URLs from the API (`/documents/{id}/url`, `/certificates/{id}/pdf`); never cache or store the URL.
+- Documents/certificates open through short-lived signed URLs from the API (`/documents/{id}/url`, `/certificates/{id}/pdf`); never cache or store the URL. Certificate PDFs: `Linking.openURL` to view, `File.downloadFileAsync` + `expo-sharing` to share/save. Merchants get a Certificates tab (the API scopes the list to their org) though the web only links certificates from applications.
 - Public QR verify needs no login and shows only what `/public/verify/{certificate_number}` returns; the QR encodes `{PUBLIC_BASE_URL}/verify/{certificate_number}`, so parse the trailing number.
 - Inspection flow is one step per screen with a sticky action button; PATCH each step before advancing; confirm before the irreversible Submit.
 - Deferred until asked: push notifications, offline queue, biometric lock.

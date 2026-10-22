@@ -7,6 +7,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button, ChoiceModal, ErrorState, ErrorText, InfoText, Loading, Muted, Screen, Title } from "@/components/ui";
 import { ApiError, api, describeError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { openInTab } from "@/lib/nav";
 import { getApplicationMeta, labelFor } from "@/lib/meta";
 import { colors } from "@/lib/theme";
 import { pickPdf, pickPhoto, uploadDocument, type PickedFile } from "@/lib/upload";
@@ -34,6 +35,7 @@ export default function ApplicationDetailScreen() {
   const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [payBusy, setPayBusy] = useState(false);
 
   const app = override && state.data && override.id === state.data.id ? override : state.data;
 
@@ -112,6 +114,19 @@ export default function ApplicationDetailScreen() {
         },
       },
     ]);
+  }
+
+  // Spec 12: purely informational; payment never gates any other step.
+  async function mockPay() {
+    setPayBusy(true);
+    setActionError(null);
+    try {
+      setOverride(await api<ApplicationDetail>(`/applications/${app!.id}/mock-pay`, { method: "POST" }));
+    } catch (err) {
+      setActionError(describeError(err));
+    } finally {
+      setPayBusy(false);
+    }
   }
 
   async function submitApplication() {
@@ -232,8 +247,22 @@ export default function ApplicationDetailScreen() {
           <Muted>
             {app.certificate.certificate_number} · valid until {app.certificate.valid_until}
           </Muted>
+          <Button
+            label="View certificate"
+            variant="secondary"
+            onPress={() => openInTab({ pathname: "/certificates/[id]", params: { id: app.certificate!.id } })}
+          />
         </View>
       ) : null}
+
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Payment</Text>
+        <Muted>{labelFor(meta.data?.payment_statuses, app.payment?.status ?? "NOT_PAID")}</Muted>
+        <Muted>Informational only (prototype): payment status doesn&apos;t affect any other step.</Muted>
+        {isOwner && (!app.payment || app.payment.status !== "PAID") ? (
+          <Button label="Mock pay (prototype)" variant="secondary" onPress={() => void mockPay()} loading={payBusy} />
+        ) : null}
+      </View>
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Status history</Text>
