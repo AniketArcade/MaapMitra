@@ -22,3 +22,13 @@ export const getPublicRegions = cached<RegionMeta[]>("/public/regions"); // no a
 export function labelFor(list: { value: string; label: string }[] | undefined, value: string): string {
   return list?.find((item) => item.value === value)?.label ?? value;
 }
+
+export function typeLabel(meta: InstrumentMeta | null | undefined, value: string): string {
+  return meta?.types.find((t) => t.value === value)?.label ?? value;
+}
+
+export function regionLabel(meta: InstrumentMeta | null | undefined, state: string, district: string): string {
+  const region = meta?.regions.find((r) => r.state_code === state);
+  const districtName = region?.districts.find((d) => d.code === district)?.name;
+  return region && districtName ? `${districtName}, ${region.state_name}` : `${state} / ${district}`;
+}

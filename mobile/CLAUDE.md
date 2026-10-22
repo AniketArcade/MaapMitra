@@ -22,8 +22,8 @@ eas build --profile preview
 ## Layout
 
 ```text
-src/lib/        qr (parse scanned URL/number), verify (public verify call + date format), config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
-src/components/ verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
+src/lib/        use-async (fetch + refetch on focus), qr (parse scanned URL/number), verify (public verify call + date format), config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
+src/components/ instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
 src/app/        _layout (AuthProvider + Stack.Protected by role), (auth)/ index=login + register, verify (public),
                 (merchant)/ (officer)/ (gatc)/ tab layouts; officer extras live in the nested stack (officer)/more/
 ```
@@ -53,6 +53,7 @@ nature: **no secrets in the app bundle**, no Supabase keys, no direct Supabase c
 - Types come from `../packages/api-types` (generated from the backend OpenAPI schema; regenerate with `npm run gen` there), not hand-copied.
 - **Never hard-code** statuses, types, units, regions, checklist items — load `/instruments/meta`, `/applications/meta`, `/inspections/meta`. Never re-derive `locked_fields`; action buttons come from `allowed_actions`; never aggregate paged data (use stats endpoints/`total`).
 - Role navigation mirrors `frontend/components/app-shell.tsx` (`NAV` for Merchant, `OFFICER_NAV`, `GATC_NAV`; no admin navs); it is UX only, the backend enforces. Handle 403/404 explicitly.
+- Instrument categories (spec 16, optional) are not in the app: create sends flat fields only, edit never touches `category_id`/`category_values` (edit on the website).
 - Every screen handles loading, empty, error and success. Scheduling "today" uses the backend timezone from `ApplicationMeta.scheduling`.
 - **Uploads:** compress/resize photos below the server's 10 MiB limit before `POST /documents` (PDF/JPG/PNG only). Inspection photos use `document_type: "INSPECTION_EVIDENCE"`.
 - Documents/certificates open through short-lived signed URLs from the API (`/documents/{id}/url`, `/certificates/{id}/pdf`); never cache or store the URL.

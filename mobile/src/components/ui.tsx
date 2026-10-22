@@ -14,15 +14,24 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { colors } from "@/lib/theme";
 
-export function Screen({ children, scroll = true }: { children: ReactNode; scroll?: boolean }) {
+export function Screen({
+  children,
+  scroll = true,
+  hasHeader = false,
+}: {
+  children: ReactNode;
+  scroll?: boolean;
+  /** Under a navigation header the header already covers the status bar: skip the top inset. */
+  hasHeader?: boolean;
+}) {
   return (
-    <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
+    <SafeAreaView style={styles.screen} edges={hasHeader ? ["left", "right"] : ["top", "left", "right"]}>
       {scroll ? (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           {children}
         </ScrollView>
       ) : (
-        <View style={styles.content}>{children}</View>
+        <View style={styles.fixed}>{children}</View>
       )}
     </SafeAreaView>
   );
@@ -82,7 +91,7 @@ export function TextField({
       <Text style={styles.label}>{label}</Text>
       <TextInput
         placeholderTextColor={colors.muted}
-        style={[styles.input, error ? styles.inputError : null]}
+        style={[styles.input, error ? styles.inputError : null, input.editable === false && { opacity: 0.5 }]}
         {...input}
       />
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -199,6 +208,7 @@ export function Select({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: 16, gap: 12, flexGrow: 1 },
+  fixed: { flex: 1, padding: 16, gap: 12 },
   title: { fontSize: 24, fontWeight: "700", color: colors.text },
   muted: { fontSize: 14, color: colors.muted },
   button: { minHeight: 48, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
