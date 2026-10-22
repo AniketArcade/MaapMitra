@@ -19,7 +19,7 @@ Rules for the app live in `mobile/CLAUDE.md`; project rules in `CLAUDE.md`.
 - ✅ Phase 3 done: `mobile/` scaffolded (Expo SDK 58, strict TS, `@api-types` alias, iOS bundle builds).
 - ✅ Phase 4 done: API client, secure session restore, login/register, Merchant/Officer/GATC tab shell, admin block (verified on the Android emulator).
 - ✅ Phase 5 done: public QR verify (`app/verify.tsx`): camera scanner + manual entry, VALID/EXPIRED/SUPERSEDED/REVOKED badge, not-found/error states. Manual entry verified on the emulator; a real QR scan still needs a physical phone.
-- 🟡 Phase 6 in progress: **6a done**: Merchant dashboard (instrument count, status chips from `/applications/stats`, drafts, recent) and Instruments (search/paging, detail, create, edit with `locked_fields`, delete). Next: 6b applications + documents, 6c certificates.
+- 🟡 Phase 6 in progress: **6a done**: Merchant dashboard and Instruments. **6b done**: Applications (list with status filter + search, create draft, detail with per-type uploads compressed on-device, view via signed URL, remove, submit/resubmit gated on `allowed_actions`, status history). Next: 6c certificates (list/detail/PDF, QR, mock payment).
 - ⬜ Not yet: rest of Phase 6, Phases 7-8, password reset, account deletion, store release.
 
 Each phase below ends with a **Done when** check. Don't start the next phase until it passes.

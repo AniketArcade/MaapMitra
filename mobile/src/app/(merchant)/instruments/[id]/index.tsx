@@ -5,6 +5,7 @@ import { Alert, StyleSheet, Text, View } from "react-native";
 
 import { Button, ErrorState, Loading, Muted, Screen, Title, ErrorText } from "@/components/ui";
 import { ApiError, api, describeError } from "@/lib/api";
+import { openInTab } from "@/lib/nav";
 import { getInstrumentMeta, regionLabel, typeLabel } from "@/lib/meta";
 import { colors } from "@/lib/theme";
 import { useAsync } from "@/lib/use-async";
@@ -90,6 +91,17 @@ export default function InstrumentDetail() {
         </Muted>
       ) : null}
 
+      {i.active_application ? (
+        <Button
+          label={`View application ${i.active_application.application_number}`}
+          onPress={() => openInTab({ pathname: "/applications/[id]", params: { id: i.active_application!.id } })}
+        />
+      ) : (
+        <Button
+          label="Apply for verification"
+          onPress={() => openInTab({ pathname: "/applications/new", params: { instrument_id: i.id } })}
+        />
+      )}
       <Button label="Edit" variant="secondary" onPress={() => router.push({ pathname: "/instruments/[id]/edit", params: { id: i.id } })} />
       <Button label="Delete" variant="secondary" onPress={confirmDelete} loading={deleting} />
     </Screen>

@@ -63,7 +63,9 @@ async function rawFetch(path: string, init: RequestInit): Promise<Response> {
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     return await fetch(`${API_ORIGIN}/api${path}`, { ...init, signal: controller.signal });
-  } catch {
+  } catch (cause) {
+    // Dev builds only: surfaces the real reason (never headers/tokens) behind the generic message.
+    if (__DEV__) console.warn("[api] request failed:", path, cause instanceof Error ? cause.message : cause);
     throw new ApiError(
       NETWORK_ERROR_STATUS,
       "Can't reach the server. Check your connection and try again.",

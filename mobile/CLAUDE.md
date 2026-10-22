@@ -22,7 +22,7 @@ eas build --profile preview
 ## Layout
 
 ```text
-src/lib/        use-async (fetch + refetch on focus), qr (parse scanned URL/number), verify (public verify call + date format), config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
+src/lib/        use-async (fetch + refetch on focus), use-paged-list (server paging + filters), upload (pick/compress/upload), nav (openInTab), qr (parse scanned URL/number), verify (public verify call + date format), config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
 src/components/ instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
 src/app/        _layout (AuthProvider + Stack.Protected by role), (auth)/ index=login + register, verify (public),
                 (merchant)/ (officer)/ (gatc)/ tab layouts; officer extras live in the nested stack (officer)/more/
@@ -55,7 +55,8 @@ nature: **no secrets in the app bundle**, no Supabase keys, no direct Supabase c
 - Role navigation mirrors `frontend/components/app-shell.tsx` (`NAV` for Merchant, `OFFICER_NAV`, `GATC_NAV`; no admin navs); it is UX only, the backend enforces. Handle 403/404 explicitly.
 - Instrument categories (spec 16, optional) are not in the app: create sends flat fields only, edit never touches `category_id`/`category_values` (edit on the website).
 - Every screen handles loading, empty, error and success. Scheduling "today" uses the backend timezone from `ApplicationMeta.scheduling`.
-- **Uploads:** compress/resize photos below the server's 10 MiB limit before `POST /documents` (PDF/JPG/PNG only). Inspection photos use `document_type: "INSPECTION_EVIDENCE"`.
+- **Uploads:** `lib/upload.ts` resizes photos (long edge 2000 px, JPEG 0.7) before `POST /documents` (PDF/JPG/PNG only). Multipart bodies must use `new File(uri)` from `expo-file-system` (a Blob); the old `{uri, name, type}` descriptor fails with "Unsupported FormDataPart". Inspection photos use `document_type: "INSPECTION_EVIDENCE"`.
+- **Cross-tab navigation:** push into another tab's stack with `openInTab(href)` (`withAnchor`) and give that stack's `_layout` `unstable_settings = { anchor: "index" }`, otherwise the detail is the only screen and Back has nowhere to go.
 - Documents/certificates open through short-lived signed URLs from the API (`/documents/{id}/url`, `/certificates/{id}/pdf`); never cache or store the URL.
 - Public QR verify needs no login and shows only what `/public/verify/{certificate_number}` returns; the QR encodes `{PUBLIC_BASE_URL}/verify/{certificate_number}`, so parse the trailing number.
 - Inspection flow is one step per screen with a sticky action button; PATCH each step before advancing; confirm before the irreversible Submit.

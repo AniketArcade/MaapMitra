@@ -1,84 +1,24 @@
-import type { Instrument, Page } from "@api-types";
+import type { Instrument } from "@api-types";
 import { useFocusEffect, router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { Button, Empty, ErrorState, Loading, Muted, Screen } from "@/components/ui";
-import { api, describeError } from "@/lib/api";
 import { getInstrumentMeta, typeLabel } from "@/lib/meta";
 import { colors } from "@/lib/theme";
 import { useAsync } from "@/lib/use-async";
-
-const PAGE_SIZE = 20;
-
-type List = { items: Instrument[]; total: number };
-
-// Paged, server-side search: `total` comes from the API, never counted on the client.
-function useInstrumentList() {
-  const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
-  const [reload, setReload] = useState(0);
-  const [list, setList] = useState<List | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
-    if (query) params.set("q", query);
-    api<Page<Instrument>>(`/instruments?${params}`).then(
-      (data) => {
-        if (cancelled) return;
-        setList((prev) => ({
-          total: data.total,
-          items: page === 1 || !prev ? data.items : [...prev.items, ...data.items],
-        }));
-        setError(null);
-        setLoading(false);
-      },
-      (err: unknown) => {
-        if (cancelled) return;
-        setError(describeError(err));
-        setLoading(false);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [query, page, reload]);
-
-  return {
-    list,
-    query,
-    error,
-    loading,
-    /** A new search always starts from page 1. */
-    search: (q: string) => {
-      setQuery(q);
-      setPage(1);
-    },
-    loadMore: () => {
-      setLoading(true);
-      setPage((p) => p + 1);
-    },
-    /** Starts again from page 1 (new search, or returning from a form). */
-    restart: () => {
-      setLoading(true);
-      setPage(1);
-      setReload((n) => n + 1);
-    },
-  };
-}
+import { usePagedList } from "@/lib/use-paged-list";
 
 export default function InstrumentsList() {
   const [text, setText] = useState("");
   const meta = useAsync(getInstrumentMeta); // labels only; codes are the fallback
-  const { list, query, error, loading, loadMore, restart, search } = useInstrumentList();
+  const { list, filters, error, loading, loadMore, restart, setFilter } = usePagedList<Instrument>("/instruments");
+  const query = filters.q ?? "";
 
   useEffect(() => {
-    const t = setTimeout(() => search(text.trim()), 300);
+    const t = setTimeout(() => setFilter({ q: text.trim() }), 300);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- search identity changes every render
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setFilter identity changes every render
   }, [text]);
 
   // Coming back from create/edit/delete: reload from page 1.
@@ -119,6 +59,8 @@ export default function InstrumentsList() {
     <Screen scroll={false} hasHeader>
       <FlatList
         data={list?.items ?? []}
+        refreshing={false}
+        onRefresh={restart}
         keyExtractor={(i) => i.id}
         ListHeaderComponent={header}
         ListEmptyComponent={

@@ -1,23 +1,26 @@
 import type { Application, ApplicationStats, Instrument, Page } from "@api-types";
-import { router } from "expo-router";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 import { Chip, Section } from "@/components/section";
 import { Button, Muted, Screen, Title } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { openInTab } from "@/lib/nav";
 import { getApplicationMeta, labelFor } from "@/lib/meta";
 import { colors } from "@/lib/theme";
 import { useAsync } from "@/lib/use-async";
 
 function ApplicationRow({ a, statusLabel }: { a: Application; statusLabel: string }) {
   return (
-    <View style={{ gap: 2 }}>
+    <Pressable
+      onPress={() => openInTab({ pathname: "/applications/[id]", params: { id: a.id } })}
+      style={{ gap: 2 }}
+    >
       <Text style={{ fontWeight: "600", color: colors.text }}>{a.application_number}</Text>
       <Muted>
         {statusLabel} · {a.instrument.manufacturer} {a.instrument.model} · S/N {a.instrument.serial_number}
       </Muted>
-    </View>
+    </Pressable>
   );
 }
 
@@ -30,8 +33,15 @@ export default function MerchantDashboard() {
   const meta = useAsync(getApplicationMeta);
   const statusLabel = (s: string) => labelFor(meta.data?.statuses, s);
 
+  function refreshAll() {
+    instruments.retry();
+    stats.retry();
+    drafts.retry();
+    recent.retry();
+  }
+
   return (
-    <Screen>
+    <Screen onRefresh={refreshAll}>
       <Title>{user?.organization_name ?? "Dashboard"}</Title>
       <Muted>Business dashboard</Muted>
 
@@ -44,7 +54,7 @@ export default function MerchantDashboard() {
             <Button
               label={total === 0 ? "Register your first instrument" : "Register instrument"}
               variant={total === 0 ? "primary" : "secondary"}
-              onPress={() => router.push("/instruments/new")}
+              onPress={() => openInTab("/instruments/new")}
             />
           </View>
         )}

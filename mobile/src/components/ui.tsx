@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,16 +19,29 @@ export function Screen({
   children,
   scroll = true,
   hasHeader = false,
+  onRefresh,
 }: {
   children: ReactNode;
   scroll?: boolean;
+  /** Pull-to-refresh: called when the user drags down; the spinner shows briefly. */
+  onRefresh?: () => void;
   /** Under a navigation header the header already covers the status bar: skip the top inset. */
   hasHeader?: boolean;
 }) {
+  const [refreshing, setRefreshing] = useState(false);
+  function refresh() {
+    setRefreshing(true);
+    onRefresh?.();
+    setTimeout(() => setRefreshing(false), 700);
+  }
   return (
     <SafeAreaView style={styles.screen} edges={hasHeader ? ["left", "right"] : ["top", "left", "right"]}>
       {scroll ? (
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={refresh} /> : undefined}
+        >
           {children}
         </ScrollView>
       ) : (
@@ -141,6 +155,44 @@ export function Empty({ message }: { message: string }) {
   );
 }
 
+/** Bottom-sheet style list of actions (e.g. "Take photo" / "Choose photo" / "Choose PDF"). */
+export function ChoiceModal({
+  visible,
+  title,
+  options,
+  onClose,
+}: {
+  visible: boolean;
+  title: string;
+  options: { label: string; onPress: () => void }[];
+  onClose: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <View style={styles.sheet}>
+          <Text style={styles.sheetTitle}>{title}</Text>
+          {options.map((o) => (
+            <Pressable
+              key={o.label}
+              style={styles.option}
+              onPress={() => {
+                onClose();
+                o.onPress();
+              }}
+            >
+              <Text style={{ color: colors.text, fontSize: 16 }}>{o.label}</Text>
+            </Pressable>
+          ))}
+          <Pressable style={styles.option} onPress={onClose}>
+            <Text style={{ color: colors.primary, fontSize: 16, fontWeight: "600" }}>Cancel</Text>
+          </Pressable>
+        </View>
+      </Pressable>
+    </Modal>
+  );
+}
+
 /** Modal list picker (state/district etc.). Options always come from the backend /meta data. */
 export function Select({
   label,
@@ -236,5 +288,8 @@ const styles = StyleSheet.create({
   infoBoxText: { color: colors.info, fontSize: 14 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 24 },
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16 },
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
+  sheet: { backgroundColor: colors.card, borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingBottom: 24 },
+  sheetTitle: { fontSize: 16, fontWeight: "700", color: colors.text, padding: 16 },
   option: { padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
 });
