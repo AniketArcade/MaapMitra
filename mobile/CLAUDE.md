@@ -1,6 +1,6 @@
 # Mobile — Expo (React Native)
 
-Project-wide rules are in `../CLAUDE.md`. **Status: auth + role shell done** (login/register, persisted session, Merchant/Officer/GATC tabs with placeholder screens). Public QR verify (5), Merchant (6) and Officer/GATC (7) flows done; remaining: officer expiring-soon and store-readiness (`../appguide.md` Phases 8-10). It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
+Project-wide rules are in `../CLAUDE.md`. **Status: auth + role shell done** (login/register, persisted session, Merchant/Officer/GATC tabs with placeholder screens). Public QR verify (5), Merchant (6) and Officer/GATC (7) flows done; Phase 8 (officer expiry view) done; remaining: store-readiness (`../appguide.md` Phases 9-10). It serves four audiences only: the Public (anonymous QR verification), Merchants (`BUSINESS`),
 LM Officers (`LM_OFFICER`) and GATC test centres (`GATC`), against the same FastAPI backend as the web app.
 **Admin roles (DISTRICT/STATE/SUPER_ADMIN) are web-only**: if one logs in, sign out and say "Admin accounts are available on the website".
 
@@ -23,7 +23,7 @@ eas build --profile preview
 
 ```text
 src/lib/        certificates (open/share PDF via signed URL), use-async (fetch + refetch on focus), use-paged-list (server paging + filters), upload (pick/compress/upload), nav (openInTab), qr (parse scanned URL/number), verify (public verify call + date format), config, storage (secure-store), api (single client), auth (AuthProvider), meta (cached /meta), nav, theme
-src/components/ inspection-screen (field flow, root route `/inspection/[id]`), schedule-dialog, application-list/application-screen/application-row (shared by roles), officer-dashboard, instrument-list/instrument-detail (`canManage` for Business only), certificate-list/certificate-view (shared by all roles), instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
+src/components/ expiry-dashboard (officer), inspection-screen (field flow, root route `/inspection/[id]`), schedule-dialog, application-list/application-screen/application-row (shared by roles), officer-dashboard, instrument-list/instrument-detail (`canManage` for Business only), certificate-list/certificate-view (shared by all roles), instrument-form, section (dashboard card), verify-result (status badge card), ui (Screen/Button/TextField/Select/Loading/ErrorState/Empty), profile, placeholder, tab-icon
 src/app/        _layout (AuthProvider + Stack.Protected by role), (auth)/ index=login + register, verify (public),
                 (merchant)/ (officer)/ (gatc)/ tab layouts; officer extras live in the nested stack (officer)/more/
 ```

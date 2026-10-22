@@ -1,5 +1,3 @@
-import { PlaceholderScreen } from "@/components/placeholder";
+import { ExpiryDashboard } from "@/components/expiry-dashboard";
 
-export default function ExpiringSoon() {
-  return <PlaceholderScreen title="Expiring soon" phase="Phase 8" />;
-}
+export default ExpiryDashboard;

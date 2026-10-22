@@ -1,6 +1,6 @@
-import type { Application, ApplicationStats, Instrument, Page } from "@api-types";
+import type { AdminCertificateStats, Application, ApplicationStats, Instrument, Page } from "@api-types";
 import { router } from "expo-router";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 import { ApplicationRow } from "@/components/application-row";
 import { Chip, Section } from "@/components/section";
@@ -57,6 +57,7 @@ export function OfficerDashboard() {
   const { user } = useAuth();
   const instruments = useAsync(() => api<Page<Instrument>>("/instruments?page_size=1").then((p) => p.total));
   const stats = useAsync(() => api<ApplicationStats>("/applications/stats"));
+  const certStats = useAsync(() => api<AdminCertificateStats>("/admin/certificates/stats"));
   const meta = useAsync(getApplicationMeta);
 
   return (
@@ -98,6 +99,18 @@ export function OfficerDashboard() {
             </View>
           )
         }
+      </Section>
+
+      <Section title="Certificates" state={certStats} errorMessage="Couldn't load certificate stats.">
+        {(c) => (
+          <Pressable
+            onPress={() => router.push("/more/expiring-soon")}
+            style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}
+          >
+            <Text style={{ color: colors.text }}>Expiring soon</Text>
+            <Chip>{c.expiring_soon}</Chip>
+          </Pressable>
+        )}
       </Section>
 
       {OFFICER_BUCKETS.map((b) => (
